@@ -306,6 +306,7 @@ class App:
         self.tool_tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
         self.tool_tree.bind("<Double-1>", lambda _: self.start_download())
+        self.tool_tree.bind("<<TreeviewSelect>>", self._on_tool_select)
         pane.add(right)
 
     def _build_bottom(self):
@@ -324,6 +325,9 @@ class App:
 
         btn_row = ttk.Frame(bottom)
         btn_row.pack(fill="x", pady=(6, 0))
+        ttk.Label(btn_row, text="版本:").pack(side="left")
+        self.version_combo = ttk.Combobox(btn_row, state="readonly", width=24)
+        self.version_combo.pack(side="left", padx=(4, 10))
         self.download_btn = ttk.Button(btn_row, text="开始下载", command=self.start_download)
         self.download_btn.pack(side="left")
         self.cancel_btn = ttk.Button(btn_row, text="取消下载", command=self.cancel_download,
@@ -351,10 +355,12 @@ class App:
         for tool in TOOLS:
             if self.current_category != "全部" and tool["category"] != self.current_category:
                 continue
-            if kw and kw not in (tool["name"] + tool["version"] + tool["description"]).lower():
+            if kw and kw not in (tool["name"] + tool["versions"][0]["label"]
+                                 + tool["description"]).lower():
                 continue
             self.tool_tree.insert("", "end",
-                                  values=(tool["name"], tool["version"], tool["description"]),
+                                  values=(tool["name"], tool["versions"][0]["label"],
+                                          tool["description"]),
                                   iid=str(id(tool)))
 
     def get_selected_tool(self):
@@ -363,6 +369,23 @@ class App:
             messagebox.showinfo("提示", "请先在列表中选择一个工具")
             return None
         return next(t for t in TOOLS if str(id(t)) == sel[0])
+
+    def _on_tool_select(self, _):
+        try:
+            if not self.version_combo.winfo_exists():
+                return
+            tool = self.get_selected_tool()
+            if not tool:
+                self.version_combo["values"] = []
+                self.current_versions = []
+                return
+            self.current_tool = tool
+            self.current_versions = tool["versions"]
+            labels = [v["label"] for v in self.current_versions]
+            self.version_combo["values"] = labels
+            self.version_combo.current(0)
+        except Exception:
+            return
 
     def _browse_dir(self):
         path = filedialog.askdirectory(initialdir=self.save_dir.get())
@@ -383,6 +406,13 @@ class App:
         tool = self.get_selected_tool()
         if not tool:
             return
+        versions = tool.get("versions") or self.current_versions
+        idx = self.version_combo.current()
+        if idx < 0 or idx >= len(versions):
+            idx = 0
+        version = versions[idx]
+        url = version["url"]
+
         dest_dir = self.save_dir.get().strip()
         if not dest_dir:
             dest_dir = os.path.join(os.path.expanduser("~"), "Downloads")
@@ -392,10 +422,10 @@ class App:
         self.current_tool = tool
         self.cancel_event = threading.Event()
         self.downloader = ToolDownloader(
-            tool["url"], dest_dir, self.cancel_event,
+            url, dest_dir, self.cancel_event,
             on_progress=self._on_progress, on_done=self._on_done,
         )
-        self.status.set(f"正在下载: {tool['name']} ({tool['version']}) ...")
+        self.status.set(f"正在下载: {tool['name']} ({version['label']}) ...")
         self.download_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.progress.configure(value=0)
