@@ -30,7 +30,7 @@ jobs:
 
       - name: 语法检查
         run: |
-          python -X utf8 -m py_compile app.py tools.py tests/test_app.py tests/selfcheck.py
+          python -X utf8 -m py_compile app.py tools.py tooldata.py tests/test_app.py tests/selfcheck.py
           echo "语法检查通过"
 
       - name: 运行单元测试
@@ -39,7 +39,7 @@ jobs:
 
       - name: 校验内置工具数据完整性
         run: |
-          python -X utf8 -m tests.selfcheck
+          python -X utf8 tooldata.py
 
   lint:
     runs-on: windows-latest

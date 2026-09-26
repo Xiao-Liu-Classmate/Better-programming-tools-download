@@ -1,0 +1,43 @@
+version: '1.0'
+name: pipeline-tools-data-check
+displayName: 工具库数据校验
+
+# Gitee Go 流水线（仓库内流水线，存放于 .workflow/ 目录）
+#
+# 说明: 本项目是 Windows 专用工具(Tkinter GUI), 完整单元测试需要
+#       Windows + tkinter, 而 Gitee 免费版流水线仅提供 Linux 容器。
+#       因此这里只跑"数据层"校验 —— tooldata.py 与 tools.py 均零依赖,
+#       可在任意 Python 环境运行。
+#       完整单元测试见 GitHub 侧 .github/workflows/ci.yml (windows-latest)。
+#
+# 注意: 所有 python 调用都带 -X utf8。容器 locale 通常为 C/POSIX,
+#       Python 3.8+ 的 stdout 编码会是 ASCII, 直接打印中文会抛
+#       UnicodeEncodeError, 导致"校验通过但流水线红"的假失败。
+
+triggers:
+  push:
+    branches:
+      precise:
+        - master
+  pr:
+    branches:
+      precise:
+        - master
+
+stages:
+  - stage:
+      name: data-check
+      displayName: 工具库校验
+      steps:
+        - step: shell@agent
+          name: syntax
+          displayName: 语法检查
+          commands:
+            - python3 -X utf8 -m py_compile tools.py tooldata.py
+            - echo "语法检查通过"
+
+        - step: shell@agent
+          name: validate
+          displayName: 校验内置工具定义
+          commands:
+            - python3 -X utf8 tooldata.py --stats

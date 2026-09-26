@@ -1,0 +1,86 @@
+# 更新日志
+
+本文件记录「编程工具下载器」的显著变更。
+
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [未发布]
+
+### 计划中
+
+- 断点续传：当前 `.partial_download` 每次启动即删除，无法续传
+- 镜像源回退：官方源不可达时尝试备用镜像（需权衡供应链风险）
+- 多线程分片下载
+- 工具版本自动巡检：定期探测官方直链是否失效或跳转到新版本
+
+## [4.0.0] - 2026-09-26
+
+### 新增
+
+- **28 款工具**（原 22 款），48 条官方直链
+  - 语言运行时：Miniconda3、Flutter SDK
+  - 开发环境：Visual Studio Community、Android Studio
+  - 构建工具（新增分类）：Apache Maven、Gradle
+  - 新增工具均取自非 GitHub 源，优先保证国内可用性
+- **数据层抽离** `tooldata.py`：工具校验与读写不含任何 GUI 行为，可在无图形
+  环境（CI 的 Linux 容器）运行，避免校验规则出现两份副本
+- **`python tooldata.py [--stats]` 命令行入口**：校验内置工具库内在一致性
+  （定义合法、工具名不重复、版本标签不重复、分类已声明且非空），
+  供 CI 直接调用
+- **Gitee Go 流水线**（`.workflow/`）：与 GitHub Actions 并存的双平台 CI
+- **故障诊断** `check_hosts_blocking()`：下载失败时自动检测本机 hosts
+  是否把目标域名指向回环地址，并回显具体域名与 IP
+- **CDN 指纹适配** `prefer_curl`：JetBrains、Docker、Flutter、Gradle 等 CDN
+  会按 TLS 指纹拒绝 urllib，这些域名直接走 curl 模式并省略自定义 User-Agent
+- **任务世代号机制** `_task_seq`：取消或切换任务后，旧线程的迟到回调被
+  丢弃，不再污染新任务的进度条与状态栏
+- 单元测试 129 项（`tests/test_app.py`），不触网、不创建 GUI 窗口
+- 代码卫生自检（`tests/selfcheck.py`），仅依赖标准库
+- `CHANGELOG.md`
+
+### 安全
+
+- `validate_tool()` 强校验 `deploy` 字段类型与顶层 `homepage`，非法项剔除；
+  杜绝损坏的自定义 JSON 导致启动崩溃
+- `validate_tool()` 对 `category` 去除首尾空白，避免 `" 构建工具 "` 这类
+  值通过校验后在界面出现空白分类页签
+- 文件名白名单净化 `safe_filename()`，防路径穿越与命令注入
+- 解压校验 Zip Slip 路径，并限制解压总量 20 GB，防 zip bomb
+- 自定义安装命令的占位符按上下文自动补引号，兼容单/双引号模板，
+  避免路径含空格被 shell 拆词
+- 提权安装抽出 `Deployer._run_elevated()` 公共通道，MSI 与 EXE 共用；
+  `-PassThru` 回传真实退出码，并处理进程对象为空的情况，
+  修复安装失败被误报为成功
+- 导入数据仅允许 `http(s)` 协议，杜绝 `file://` 读取本地文件
+- 导出工具时过滤 `_` 前缀的运行时内部字段
+- 导入自定义工具时若落盘失败会明确报错，不再谎报「导入成功」
+
+### 修复
+
+- **MSI 静默安装缺少提权通道**：Node.js、Go、OpenJDK、PowerShell 7 均安装到
+  `C:\Program Files`，未提权时 msiexec 返回 1603/1925 必然失败。
+  现已支持 `need_admin` 走 UAC 通道；Python（`InstallAllUsers=1`）一并补上
+- 取消或切换任务后旧线程回调污染新任务状态（可能致并行下载、按钮错乱）
+- 版本列表取自上一个工具，导致下载错误 URL 并按新工具的部署配置安装
+- 首页首屏先显示「未安装」再全量重绘的状态闪烁
+- `_install_custom` 二次净化文件名，把 `xxx (1).exe` 的括号替换为下划线
+- 窗口关闭后后台线程访问已销毁控件
+- **IntelliJ IDEA 与 PyCharm 的 `verify` 路径完全相同**，装其中一个会让
+  另一个也显示「已装」；现精确到产品名
+- `tools.py` 文档字符串中的无效转义序列（未来 Python 会升级为 SyntaxError）
+- 复制 URL 的临时状态提示会覆盖任务进行中的状态
+
+### 工程
+
+- 新增 `.gitignore`，排除 `__pycache__/`、`build/`、`dist/`、二进制产物与
+  运行时配置；`dist/*.exe`（11 MB）已移出版本库
+- README 重写：徽章、功能、快捷键、自定义工具格式、故障排查、
+  开发与测试、贡献指南、安全说明
+- 「关于」对话框的工具数量改为引用 `len(TOOLS)`，不再硬编码
+- 版本标签去除会误导的「最新」字样，README 增加「关于版本号」说明
+- GitHub / Gitee 双平台同步
+
+## [3.x 及更早]
+
+见提交历史。早期版本提供工具直链下载、静默安装、批量部署与已安装检测。

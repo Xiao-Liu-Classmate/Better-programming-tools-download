@@ -2,13 +2,13 @@
 """编程工具下载器 v4.0 (Windows / Python + Tkinter)
 
 功能:
-- 22+ 款主流编程工具,官方直链,支持选择版本
+- 28 款主流编程工具,官方直链,支持选择版本
 - 一键部署:下载完成后自动静默安装/解压,全程无需手动操作
 - 批量部署:多选工具后一键全部部署
 - 已安装检测:列表中自动标记已安装的工具
 - 设置持久化:下载目录等配置自动保存
 - 自动识别系统,优先 urllib 下载,CDN 屏蔽时自动切换 curl.exe
-- 下载失败时引导打开官网下载页
+- 下载失败时引导打开官网下载页,并诊断本机 hosts 屏蔽
 - 搜索/分类筛选,进度条,已用时间/预估剩余时间
 """
 
@@ -29,6 +29,12 @@ from tkinter import (
     filedialog, messagebox, ttk,
 )
 
+from tooldata import (
+    DEPLOY_TYPES,
+    load_custom_tools as _load_custom_tools,
+    save_custom_tools as _save_custom_tools,
+    validate_tool,
+)
 from tools import TOOLS, CATEGORIES
 
 # ─────────────────────── 常量 ───────────────────────
@@ -174,96 +180,14 @@ def save_config(config):
         pass
 
 
-DEPLOY_TYPES = {"msi", "exe", "extract", "custom", "none"}
-
-
-def validate_tool(t):
-    """强校验工具定义, 非法则返回 None"""
-    if not isinstance(t, dict):
-        return None
-    name = t.get("name")
-    if not isinstance(name, str) or not name.strip():
-        return None
-    versions = t.get("versions")
-    if not isinstance(versions, list) or not versions:
-        return None
-    clean_versions = []
-    for v in versions:
-        if not isinstance(v, dict):
-            return None
-        label, url = v.get("label"), v.get("url")
-        if not isinstance(label, str) or not label.strip():
-            return None
-        if not isinstance(url, str) or not url.startswith(
-                ("http://", "https://")):
-            return None
-        clean_versions.append({
-            "label": label.strip(), "url": url.strip()})
-    t = dict(t)
-    t["name"] = name.strip()
-    t["versions"] = clean_versions
-
-    if not isinstance(t.get("category"), str) \
-            or not t["category"].strip():
-        t["category"] = "自定义"
-    if not isinstance(t.get("description"), str):
-        t["description"] = str(t.get("description") or "")
-    # homepage 在工具顶层 (不在 deploy 内), 非字符串会在
-    # webbrowser.open() 处抛 TypeError
-    if "homepage" in t and not isinstance(t["homepage"], str):
-        t.pop("homepage", None)
-    deploy = t.get("deploy")
-    if not isinstance(deploy, dict):
-        deploy = {"type": "none"}
-    else:
-        deploy = dict(deploy)
-        if deploy.get("type") not in DEPLOY_TYPES:
-            deploy["type"] = "none"
-        # 字段类型强校验: 非字符串/布尔会让后续 _resolve_path 等
-        # 无 try/except 的调用链抛 AttributeError 导致启动崩溃
-        for key in ("verify", "homepage", "args", "cmd"):
-            if key in deploy and not isinstance(deploy[key], str):
-                deploy.pop(key, None)
-        if "need_admin" in deploy and not isinstance(
-                deploy.get("need_admin"), bool):
-            deploy.pop("need_admin", None)
-    if deploy.get("type") == "custom" and not str(
-            deploy.get("cmd", "")).strip():
-        deploy = {"type": "none"}
-    t["deploy"] = deploy
-    return t
-
-
 def load_custom_tools():
     """加载自定义工具 (过滤非法项, 兼容导出格式)"""
-    try:
-        if os.path.exists(CUSTOM_TOOLS_PATH):
-            with open(CUSTOM_TOOLS_PATH, "r",
-                      encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                data = data.get("tools", [])
-            if not isinstance(data, list):
-                return []
-            out = []
-            for t in data:
-                clean = validate_tool(t)
-                if clean:
-                    out.append(clean)
-            return out
-    except Exception:
-        pass
-    return []
+    return _load_custom_tools(CUSTOM_TOOLS_PATH)
 
 
 def save_custom_tools(tools):
-    """保存自定义工具"""
-    try:
-        with open(CUSTOM_TOOLS_PATH, "w",
-                  encoding="utf-8") as f:
-            json.dump(tools, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    """保存自定义工具, 返回是否成功"""
+    return _save_custom_tools(tools, CUSTOM_TOOLS_PATH)
 
 
 # ─────────────────────── 异常 ───────────────────────
@@ -353,8 +277,9 @@ class Deployer:
             return True, "已下载(需手动安装)"
 
         try:
+            need_admin = bool(deploy_config.get("need_admin"))
             if deploy_type == "msi":
-                ok, msg = Deployer._install_msi(file_path)
+                ok, msg = Deployer._install_msi(file_path, need_admin)
             elif deploy_type == "exe":
                 ok, msg = Deployer._install_exe(file_path, deploy_config)
             elif deploy_type == "extract":
@@ -374,14 +299,50 @@ class Deployer:
             return False, f"安装出错: {e}"
 
     @staticmethod
-    def _install_msi(file_path):
-        cmd = ["msiexec.exe", "/quiet", "/norestart", "/i", file_path]
-        proc = subprocess.run(
-            cmd, capture_output=True, timeout=600,
+    def _run_elevated(cmd, timeout):
+        """以管理员身份运行命令, 回传子进程真实退出码。
+
+        用 PowerShell -EncodedCommand 传递, 避免路径/参数被 shell 解析。
+        -PassThru + exit $p.ExitCode 是必要的: Start-Process -Wait
+        不会把退出码带回, 直接判断会恒为 0 导致失败被误报成功。
+        """
+        arg_str = " ".join(f'"{a}"' for a in cmd[1:])
+        q = chr(39)
+        inner = (
+            "$ErrorActionPreference = 'Stop'; "
+            f"$p = Start-Process -FilePath '{cmd[0].replace(q, q * 2)}' "
+            f"-ArgumentList '{arg_str.replace(q, q * 2)}' "
+            "-Verb RunAs -PassThru -Wait -WindowStyle Hidden; "
+            "if ($null -eq $p) { exit 1 }; "
+            "exit $p.ExitCode"
+        )
+        encoded = base64.b64encode(
+            inner.encode("utf-16-le")).decode("ascii")
+        return subprocess.run(
+            ["powershell.exe", "-NoProfile", "-EncodedCommand", encoded],
+            capture_output=True, timeout=timeout,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+
+    @staticmethod
+    def _install_msi(file_path, need_admin=False):
+        cmd = ["msiexec.exe", "/quiet", "/norestart", "/i", file_path]
+        # 装到 C:\Program Files 的 msi 必须提权, 否则 msiexec
+        # 返回 1603/1925 权限错误
+        if need_admin:
+            proc = Deployer._run_elevated(cmd, timeout=1800)
+        else:
+            proc = subprocess.run(
+                cmd, capture_output=True, timeout=600,
+                creationflags=getattr(
+                    subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        # 3010 = 安装成功但需重启
         if proc.returncode in (0, 3010):
             return True, "安装成功"
+        if need_admin and proc.returncode != 0:
+            return False, (f"MSI 安装失败(退出码 {proc.returncode})。"
+                           f"若为权限问题, 请以管理员身份运行本程序")
         return False, f"MSI 安装失败(退出码 {proc.returncode})"
 
     @staticmethod
@@ -391,30 +352,7 @@ class Deployer:
         need_admin = config.get("need_admin", False)
 
         if need_admin:
-            # 用 -EncodedCommand 避免路径/参数被 shell 解析
-            # -PassThru + exit 把子进程退出码带回 (否则恒为 0,
-            # 安装失败会被误报成功)
-            arg_str = " ".join(f'"{a}"' for a in cmd[1:])
-            inner = (
-                "$ErrorActionPreference = 'Stop'; "
-                "$p = Start-Process -FilePath "
-                f"'{cmd[0].replace(chr(39), chr(39) * 2)}' "
-                "-ArgumentList "
-                f"'{arg_str.replace(chr(39), chr(39) * 2)}' "
-                "-Verb RunAs -PassThru -Wait "
-                "-WindowStyle Hidden; "
-                "if ($null -eq $p) { exit 1 }; "
-                "exit $p.ExitCode"
-            )
-            encoded = base64.b64encode(
-                inner.encode("utf-16-le")).decode("ascii")
-            proc = subprocess.run(
-                ["powershell.exe",
-                 "-NoProfile", "-EncodedCommand", encoded],
-                capture_output=True, timeout=1800,
-                creationflags=getattr(
-                    subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            proc = Deployer._run_elevated(cmd, timeout=1800)
         else:
             proc = subprocess.run(
                 cmd, capture_output=True, timeout=1800,
@@ -490,7 +428,8 @@ class ToolDownloader:
     CURL_PREFERRED_HOSTS = (
         "download.jetbrains.com",
         "desktop.docker.com",
-        "repo.maven.apache.org",
+        "storage.googleapis.com",
+        "services.gradle.org",
     )
 
     def __init__(self, url, dest_dir, cancel_event,
@@ -1053,7 +992,14 @@ class App:
                     existing.append(t)
                     added += 1
 
-            save_custom_tools(existing)
+            # 落盘失败须明确告知, 否则用户重启后工具全部消失
+            if not save_custom_tools(existing):
+                messagebox.showerror(
+                    "保存失败",
+                    f"无法写入 {CUSTOM_TOOLS_PATH}\n"
+                    "请检查文件权限或磁盘空间。\n"
+                    "本次导入的工具在关闭程序后将丢失。")
+                return
 
             # 合并到 TOOLS
             for t in existing:
@@ -2097,7 +2043,7 @@ class App:
             f"{APP_TITLE}\n\n"
             f"一款 Windows 编程工具一键下载部署工具。\n\n"
             f"功能:\n"
-            f"• 22+ 款主流开发工具官方直链\n"
+            f"• {len(TOOLS)} 款主流开发工具官方直链\n"
             f"• 一键部署: 下载 + 静默安装\n"
             f"• 批量部署: 多选工具同时安装\n"
             f"• 已安装状态自动检测\n"

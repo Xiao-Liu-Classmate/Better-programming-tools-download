@@ -18,6 +18,7 @@ deploy 字段说明:
 CATEGORIES = [
     "语言运行时",
     "开发环境 (IDE)",
+    "构建工具",
     "版本控制与命令行",
     "数据库与容器",
 ]
@@ -31,10 +32,12 @@ TOOLS = [
         "deploy": {
             "type": "exe",
             "args": "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0",
+            # InstallAllUsers=1 会写入 C:\Program Files 与 HKLM, 需提权
+            "need_admin": True,
             "verify": r"C:\Program Files\Python312\python.exe",
         },
         "versions": [
-            {"label": "3.12.5 (最新)", "url": "https://www.python.org/ftp/python/3.12.5/python-3.12.5-amd64.exe"},
+            {"label": "3.12.5", "url": "https://www.python.org/ftp/python/3.12.5/python-3.12.5-amd64.exe"},
             {"label": "3.11.9", "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"},
             {"label": "3.10.11", "url": "https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe"},
         ],
@@ -45,6 +48,7 @@ TOOLS = [
         "description": "JavaScript 运行时,含 npm",
         "deploy": {
             "type": "msi",
+            "need_admin": True,
             "verify": r"C:\Program Files\nodejs\node.exe",
         },
         "versions": [
@@ -59,6 +63,7 @@ TOOLS = [
         "description": "Eclipse 基金会官方构建,含 JRE",
         "deploy": {
             "type": "msi",
+            "need_admin": True,
             "verify": r"C:\Program Files\Eclipse Adoptium",
         },
         "versions": [
@@ -73,10 +78,11 @@ TOOLS = [
         "description": "Google 官方 MSI 安装包",
         "deploy": {
             "type": "msi",
+            "need_admin": True,
             "verify": r"C:\Program Files\Go\bin\go.exe",
         },
         "versions": [
-            {"label": "1.23.1 (最新)", "url": "https://go.dev/dl/go1.23.1.windows-amd64.msi"},
+            {"label": "1.23.1", "url": "https://go.dev/dl/go1.23.1.windows-amd64.msi"},
             {"label": "1.22.7", "url": "https://go.dev/dl/go1.22.7.windows-amd64.msi"},
         ],
     },
@@ -103,9 +109,35 @@ TOOLS = [
             "verify": r"C:\Program Files\dotnet\dotnet.exe",
         },
         "versions": [
-            {"label": "9.0.100 (最新)", "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.100/dotnet-sdk-9.0.100-win-x64.exe"},
+            {"label": "9.0.100", "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.100/dotnet-sdk-9.0.100-win-x64.exe"},
             {"label": "8.0.400 (LTS)", "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/8.0.400/dotnet-sdk-8.0.400-win-x64.exe"},
         ],
+    },
+    {
+        "category": "语言运行时",
+        "name": "Miniconda3",
+        "description": "Anaconda 官方精简版,conda 环境管理",
+        "deploy": {
+            "type": "exe",
+            "args": "/InstallationType=JustMe /RegisterPython=0 /S",
+            "verify": r"C:\Users\{user}\miniconda3",
+        },
+        "versions": [
+            {"label": "最新稳定版", "url": "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe"},
+        ],
+    },
+    {
+        "category": "语言运行时",
+        "name": "Flutter SDK",
+        "description": "Google 官方 Dart/Flutter 框架(zip 绿色版),"
+                       "解压后需手动将 flutter\\bin 加入 PATH",
+        "deploy": {
+            "type": "extract",
+        },
+        "versions": [
+            {"label": "3.24.5 (stable)", "url": "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.24.5-stable.zip"},
+        ],
+        "homepage": "https://docs.flutter.dev/get-started/install/windows",
     },
 
     # ━━━━━━━━━━━━━━━ 开发环境 (IDE) ━━━━━━━━━━━━━━━
@@ -129,10 +161,11 @@ TOOLS = [
         "deploy": {
             "type": "exe",
             "args": "/S",
-            "verify": r"C:\Program Files\JetBrains",
+            # 精确到产品名, 避免装 PyCharm 时 IDEA 也被标记为已装
+            "verify": r"C:\Program Files\JetBrains\IntelliJ IDEA*",
         },
         "versions": [
-            {"label": "2025.3 (最新)", "url": "https://download.jetbrains.com/idea/idea-2025.3.exe"},
+            {"label": "2025.3", "url": "https://download.jetbrains.com/idea/idea-2025.3.exe"},
         ],
     },
     {
@@ -142,10 +175,10 @@ TOOLS = [
         "deploy": {
             "type": "exe",
             "args": "/S",
-            "verify": r"C:\Program Files\JetBrains",
+            "verify": r"C:\Program Files\JetBrains\PyCharm*",
         },
         "versions": [
-            {"label": "2025.2.6 (最新)", "url": "https://download.jetbrains.com/python/pycharm-community-2025.2.6.exe"},
+            {"label": "2025.2.6", "url": "https://download.jetbrains.com/python/pycharm-community-2025.2.6.exe"},
             {"label": "2025.2.5", "url": "https://download.jetbrains.com/python/pycharm-community-2025.2.5.exe"},
             {"label": "2025.1.6", "url": "https://download.jetbrains.com/python/pycharm-community-2025.1.6.exe"},
         ],
@@ -159,9 +192,64 @@ TOOLS = [
             "verify": r"Eclipse",
         },
         "versions": [
-            {"label": "2024-09 R (最新)", "url": "https://www.eclipse.org/downloads/download.php?file=/technology/epp/downloads/release/2024-09/R/eclipse-java-2024-09-R-win32-x86_64.zip"},
+            {"label": "2024-09 R", "url": "https://www.eclipse.org/downloads/download.php?file=/technology/epp/downloads/release/2024-09/R/eclipse-java-2024-09-R-win32-x86_64.zip"},
             {"label": "2024-06 R", "url": "https://www.eclipse.org/downloads/download.php?file=/technology/epp/downloads/release/2024-06/R/eclipse-java-2024-06-R-win32-x86_64.zip"},
         ],
+    },
+    {
+        "category": "开发环境 (IDE)",
+        "name": "Visual Studio Community",
+        "description": "微软免费版 IDE,支持 C++/C#/.NET 多语言",
+        "deploy": {
+            "type": "exe",
+            "args": "--quiet --wait --norestart --nocache",
+            "need_admin": True,
+            "verify": r"C:\Program Files\Microsoft Visual Studio\2022",
+        },
+        "versions": [
+            {"label": "2022", "url": "https://aka.ms/vs/17/release/vs_community.exe"},
+        ],
+        "homepage": "https://visualstudio.microsoft.com/vs/community/",
+    },
+    {
+        "category": "开发环境 (IDE)",
+        "name": "Android Studio",
+        "description": "Google 官方 IDE,官方安装器不支持静默参数",
+        "deploy": {
+            "type": "none",
+        },
+        "versions": [
+            {"label": "2024.2.2.13", "url": "https://redirector.gvt1.com/edgedl/android/studio/install/2024.2.2.13/android-studio-2024.2.2.13-windows.exe"},
+        ],
+        "homepage": "https://developer.android.com/studio",
+    },
+
+    # ━━━━━━━━━━━━━━━ 构建工具 ━━━━━━━━━━━━━━━
+    {
+        "category": "构建工具",
+        "name": "Apache Maven",
+        "description": "Java 项目构建工具(zip 绿色版),"
+                       "解压后需手动将 apache-maven-3.9.9-bin\\bin 加入 PATH",
+        "deploy": {
+            "type": "extract",
+        },
+        "versions": [
+            {"label": "3.9.9", "url": "https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip"},
+        ],
+        "homepage": "https://maven.apache.org/download.cgi",
+    },
+    {
+        "category": "构建工具",
+        "name": "Gradle",
+        "description": "JVM 生态主流构建工具(zip 绿色版),"
+                       "解压后需手动将 gradle-8.12\\bin 加入 PATH",
+        "deploy": {
+            "type": "extract",
+        },
+        "versions": [
+            {"label": "8.12", "url": "https://services.gradle.org/distributions/gradle-8.12-bin.zip"},
+        ],
+        "homepage": "https://gradle.org/install/",
     },
 
     # ━━━━━━━━━━━━━━━ 版本控制与命令行 ━━━━━━━━━━━━━━━
@@ -175,7 +263,7 @@ TOOLS = [
             "verify": r"C:\Program Files\Git\bin\git.exe",
         },
         "versions": [
-            {"label": "2.46.0 (最新)", "url": "https://github.com/git-for-windows/git/releases/download/v2.46.0.windows.1/Git-2.46.0-64-bit.exe"},
+            {"label": "2.46.0", "url": "https://github.com/git-for-windows/git/releases/download/v2.46.0.windows.1/Git-2.46.0-64-bit.exe"},
             {"label": "2.45.2", "url": "https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe"},
             {"label": "2.44.0", "url": "https://github.com/git-for-windows/git/releases/download/v2.44.0.windows.1/Git-2.44.0-64-bit.exe"},
         ],
@@ -203,7 +291,7 @@ TOOLS = [
             "verify": r"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal",
         },
         "versions": [
-            {"label": "1.24.11911 (最新)", "url": "https://github.com/microsoft/terminal/releases/download/v1.24.11911.0/Microsoft.WindowsTerminal_1.24.11911.0_8wekyb3d8bbwe.msixbundle"},
+            {"label": "1.24.11911", "url": "https://github.com/microsoft/terminal/releases/download/v1.24.11911.0/Microsoft.WindowsTerminal_1.24.11911.0_8wekyb3d8bbwe.msixbundle"},
             {"label": "1.22.11141", "url": "https://github.com/microsoft/terminal/releases/download/v1.22.11141.0/Microsoft.WindowsTerminal_1.22.11141.0_8wekyb3d8bbwe.msixbundle"},
         ],
     },
@@ -213,10 +301,11 @@ TOOLS = [
         "description": "微软官方 MSI 安装包",
         "deploy": {
             "type": "msi",
+            "need_admin": True,
             "verify": r"C:\Program Files\PowerShell\7\pwsh.exe",
         },
         "versions": [
-            {"label": "7.5.1 (最新)", "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.5.1/PowerShell-7.5.1-win-x64.msi"},
+            {"label": "7.5.1", "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.5.1/PowerShell-7.5.1-win-x64.msi"},
             {"label": "7.4.5", "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.4.5/PowerShell-7.4.5-win-x64.msi"},
         ],
     },
@@ -230,7 +319,7 @@ TOOLS = [
             "verify": r"C:\Program Files\7-Zip\7z.exe",
         },
         "versions": [
-            {"label": "24.08 (最新)", "url": "https://www.7-zip.org/a/7z2408-x64.exe"},
+            {"label": "24.08", "url": "https://www.7-zip.org/a/7z2408-x64.exe"},
         ],
     },
 
@@ -242,7 +331,7 @@ TOOLS = [
         "homepage": "https://dev.mysql.com/downloads/installer/",
         "deploy": {"type": "none"},
         "versions": [
-            {"label": "8.0.46 (最新)", "url": "https://dev.mysql.com/get/Downloads/MySQLInstaller/mysql-installer-community-8.0.46.0.msi"},
+            {"label": "8.0.46", "url": "https://dev.mysql.com/get/Downloads/MySQLInstaller/mysql-installer-community-8.0.46.0.msi"},
         ],
     },
     {
@@ -255,7 +344,7 @@ TOOLS = [
             "verify": r"C:\Program Files\PostgreSQL",
         },
         "versions": [
-            {"label": "17.2 (最新)", "url": "https://get.enterprisedb.com/postgresql/postgresql-17.2-1-windows-x64.exe"},
+            {"label": "17.2", "url": "https://get.enterprisedb.com/postgresql/postgresql-17.2-1-windows-x64.exe"},
             {"label": "16.4", "url": "https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64.exe"},
         ],
     },
@@ -268,7 +357,7 @@ TOOLS = [
             "verify": r"MongoDB",
         },
         "versions": [
-            {"label": "8.0.0 (最新)", "url": "https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-8.0.0.zip"},
+            {"label": "8.0.0", "url": "https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-8.0.0.zip"},
             {"label": "7.0.14", "url": "https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-7.0.14.zip"},
         ],
     },
@@ -281,7 +370,7 @@ TOOLS = [
             "verify": r"sqlite3.exe",
         },
         "versions": [
-            {"label": "3.49.0 (最新)", "url": "https://www.sqlite.org/2025/sqlite-tools-win-x64-3490100.zip"},
+            {"label": "3.49.0", "url": "https://www.sqlite.org/2025/sqlite-tools-win-x64-3490100.zip"},
             {"label": "3.46.0", "url": "https://www.sqlite.org/2024/sqlite-tools-win-x64-3460100.zip"},
         ],
     },
@@ -309,7 +398,7 @@ TOOLS = [
             "verify": r"dbeaver.exe",
         },
         "versions": [
-            {"label": "24.2.1 (最新)", "url": "https://github.com/dbeaver/dbeaver/releases/download/24.2.1/dbeaver-ce-24.2.1-win32.win32.x86_64.zip"},
+            {"label": "24.2.1", "url": "https://github.com/dbeaver/dbeaver/releases/download/24.2.1/dbeaver-ce-24.2.1-win32.win32.x86_64.zip"},
             {"label": "24.1.5", "url": "https://github.com/dbeaver/dbeaver/releases/download/24.1.5/dbeaver-ce-24.1.5-win32.win32.x86_64.zip"},
         ],
     },
@@ -323,7 +412,7 @@ TOOLS = [
             "verify": r"C:\Program Files\HeidiSQL\heidisql.exe",
         },
         "versions": [
-            {"label": "12.21 (最新)", "url": "https://github.com/HeidiSQL/HeidiSQL/releases/download/v12.21/HeidiSQL_12.21.0.7344_Setup.exe"},
+            {"label": "12.21", "url": "https://github.com/HeidiSQL/HeidiSQL/releases/download/v12.21/HeidiSQL_12.21.0.7344_Setup.exe"},
             {"label": "12.20", "url": "https://github.com/HeidiSQL/HeidiSQL/releases/download/v12.20/HeidiSQL_12.20.0.7320_Setup.exe"},
         ],
     },

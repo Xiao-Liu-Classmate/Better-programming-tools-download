@@ -1,6 +1,6 @@
 # 编程工具下载器
 
-一款 Windows 平台的编程工具一键下载与静默部署工具。内置 22 款主流开发工具的官方直链，支持版本选择、批量部署、已安装状态检测。
+一款 Windows 平台的编程工具一键下载与静默部署工具。内置 28 款主流开发工具的官方直链，支持版本选择、批量部署、已安装状态检测。
 
 **[Gitee](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download) · [GitHub](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download)**
 
@@ -31,10 +31,17 @@
 
 | 分类 | 数量 | 工具 |
 | --- | --- | --- |
-| 语言运行时 | 6 | Python、Node.js、OpenJDK (Temurin)、Go、Rust、.NET SDK |
-| 开发环境 (IDE) | 4 | VS Code、IntelliJ IDEA、PyCharm、Eclipse |
+| 语言运行时 | 8 | Python、Node.js、OpenJDK (Temurin)、Go、Rust、.NET SDK、Miniconda3、Flutter SDK |
+| 开发环境 (IDE) | 6 | VS Code、IntelliJ IDEA、PyCharm、Eclipse、Visual Studio Community、Android Studio |
+| 构建工具 | 2 | Apache Maven、Gradle |
 | 版本控制与命令行 | 5 | Git for Windows、GitHub Desktop、Windows Terminal、PowerShell 7、7-Zip |
 | 数据库与容器 | 7 | MySQL、PostgreSQL、MongoDB、SQLite、Docker Desktop、DBeaver、HeidiSQL |
+
+> 绿色版工具（Maven、Gradle、Flutter、Eclipse）解压即用，`deploy.type` 为 `extract`；官方安装器不支持静默参数的工具（Android Studio）为 `none`，程序会引导至官网。
+
+### 关于版本号
+
+工具库中的版本为**固定快照**，标签不标「最新」——因为直链锁定在特定版本，相对发布时点可能已有更新。标注「最新稳定版」的条目（Miniconda3）使用滚动 URL，始终指向官方当前版本。需要更新的版本时，请以各工具官网为准，或直接修改 `tools.py` 中的 `versions` 列表。
 
 ### 核心能力
 
@@ -99,6 +106,7 @@
 | --- | --- |
 | `msi` | MSI 包，`msiexec /quiet /norestart` 静默安装 |
 | `exe` | EXE 安装包，`args` 为静默参数，`need_admin` 触发 UAC |
+| `msi` | MSI 包，`msiexec /quiet /norestart` 静默安装；`need_admin` 同样生效 |
 | `extract` | ZIP 压缩包，解压到同名目录 |
 | `custom` | 自定义命令，`cmd` 中可用 `{file}` `{user}` `{appdata}` 占位符 |
 | `none` | 不支持自动安装，跳转官网 |
@@ -116,7 +124,7 @@ python app.py
 ## 开发与测试
 
 ```bash
-# 运行单元测试（108 项，不触网、不创建 GUI 窗口，约 0.03 秒）
+# 运行单元测试（129 项，不触网、不创建 GUI 窗口，约 0.03 秒）
 python -m unittest discover -s tests -v
 
 # 或使用 pytest
@@ -126,9 +134,21 @@ python -m pytest tests -v
 python -m tests.selfcheck
 ```
 
-测试覆盖文件名净化、自定义工具强校验、占位符替换、hosts 屏蔽诊断、CDN 站点判定、响应头与进度解析、已安装检测容错、内置工具数据完整性与 README 一致性。
+测试覆盖文件名净化、自定义工具强校验、占位符替换、hosts 屏蔽诊断、CDN 站点判定、响应头与进度解析、已安装检测容错、工具数据层一致性与 README 一致性。
 
-CI 在 GitHub 侧每次 push / PR 时自动运行上述检查（见 `.github/workflows/ci.yml`）；Gitee 侧可使用「流水线」或本地执行同两条命令。
+```bash
+# 校验内置工具库（不依赖 tkinter，可在任意 Python 环境运行）
+python tooldata.py
+```
+
+CI 说明：
+
+| 平台 | 配置 | 内容 |
+| --- | --- | --- |
+| GitHub | `.github/workflows/ci.yml` | windows-latest：语法检查 + 129 项单元测试 + 工具库校验 + 卫生自检 |
+| Gitee | `.workflow/tools-data-check.yml` | Linux 容器：语法检查 + 工具库校验 |
+
+Gitee 免费版流水线仅提供 Linux 容器，而本项目是 Windows 专用工具（需要 tkinter），因此 Gitee 侧只跑不依赖图形环境的数据层校验；完整单元测试以 GitHub 侧为准。
 
 ### 新增工具
 
@@ -169,15 +189,19 @@ pyinstaller --onefile --windowed --name "编程工具下载器" --icon app_icon.
 ```
 Better-programming-tools-download/
 ├── app.py                  # 主程序：GUI + 下载引擎 + 部署器
-├── tools.py                # 22 个工具的版本与部署配置
+├── tools.py                # 28 个工具的版本与部署配置
+├── tooldata.py             # 零依赖数据层：工具校验与读写（CI 可独立运行）
 ├── app_icon.ico            # 应用图标
 ├── run.bat                 # 启动脚本
+├── CHANGELOG.md            # 更新日志
 ├── tests/
-│   ├── test_app.py         # 单元测试（108 项）
+│   ├── test_app.py         # 单元测试（129 项）
 │   ├── selfcheck.py        # 代码卫生自检
 │   └── __init__.py
 ├── .github/
-│   └── workflows/ci.yml    # CI：测试 + 自检
+│   └── workflows/ci.yml    # GitHub CI：完整测试（windows-latest）
+├── .workflow/
+│   └── tools-data-check.yml # Gitee Go：数据层校验（Linux 容器）
 └── dist/                   # 打包输出（已 gitignore）
     └── 编程工具下载器.exe
 ```
@@ -189,13 +213,15 @@ Better-programming-tools-download/
 | 日志提示「被本机 hosts 屏蔽」 | 本机 hosts 把该域名指向了 `127.0.0.1`（常见于网络/拦截软件）。请检查 `C:\Windows\System32\drivers\etc\hosts` 或对应软件设置 |
 | JetBrains / Docker 下载很慢或首次报 404 | 这些 CDN 会拒绝「非浏览器 TLS 指纹 + 浏览器 UA」的组合，程序已内置 `prefer_curl` 直接用 curl 模式跳过失败尝试 |
 | GitHub 相关工具全部下载失败 | 多为 hosts 屏蔽或网络受限，同上；程序会在失败时自动诊断并提示 |
-| 安装时弹出 UAC 窗口 | 需管理员权限的安装（Docker、VS 类工具）属正常现象，点「是」即可 |
+| 安装时弹出 UAC 窗口 | 需管理员权限的安装属正常现象，点「是」即可。Node.js、Go、OpenJDK、PowerShell 7、Python、Visual Studio、Docker 均会自动走提权通道 |
+| MSI 安装失败(退出码 1603/1925) | 权限不足。程序对已标记 `need_admin` 的工具会自动弹 UAC；若仍失败，请以管理员身份运行本程序 |
 
 ## 安全说明
 
 - 下载文件名统一经过白名单净化（`safe_filename`），防止路径穿越与命令注入
 - 解压使用 Python 标准库，校验 Zip Slip 路径并限制解压总量（20 GB），防 zip bomb
-- 提权安装通过 PowerShell `-EncodedCommand` 传递，不拼接 shell 字符串；`need_admin` 传 `-PassThru` 回传真实退出码，失败不会误报成功
+- 提权安装通过 PowerShell `-EncodedCommand` 传递，不拼接 shell 字符串；`-PassThru` 回传真实退出码，失败不会误报成功
+- 需管理员权限的工具（装入 `C:\Program Files` 的 Node.js、Go、OpenJDK、PowerShell 7、Python、Visual Studio、Docker）由程序自动走 UAC 提权通道，无需手动以管理员身份运行
 - 自定义安装命令的占位符按上下文自动补引号，避免路径含空格被 shell 拆词
 - 导入数据经 `validate_tool()` 强校验：URL 仅允许 http(s)，杜绝 `file://` 读取本地文件
 - 需管理员权限的安装（如 Docker）会触发标准 UAC 弹窗

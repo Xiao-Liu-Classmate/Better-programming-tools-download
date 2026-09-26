@@ -14,7 +14,8 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-TARGETS = ["app.py", "tools.py", "tests/test_app.py", "tests/selfcheck.py"]
+TARGETS = ["app.py", "tools.py", "tooldata.py",
+           "tests/test_app.py", "tests/selfcheck.py"]
 MAX_LINE = 100
 
 errors = []

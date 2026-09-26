@@ -6,6 +6,8 @@
     python -m unittest discover -s tests -v
     python -m pytest tests -v
 """
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -480,6 +482,98 @@ class TestDeployerIsInstalled(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestToolDataLayer(unittest.TestCase):
+    """tooldata 数据层: 须脱离 tkinter 独立可用(供 CI Linux 容器)"""
+
+    @classmethod
+    def setUpClass(cls):
+        import tooldata
+        cls.td = tooldata
+
+    def test_module_has_no_tkinter(self):
+        """数据层不得真的 import tkinter(文档提及不算)"""
+        import ast
+        import tooldata
+        tree = ast.parse((ROOT / "tooldata.py").read_text(
+            encoding="utf-8"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    imported.add(a.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module.split(".")[0])
+        self.assertNotIn("tkinter", imported,
+                         f"数据层不应 import tkinter, 实际: {imported}")
+        self.assertLessEqual(
+            imported, {"json", "os", "sys", "collections", "tools"},
+            f"数据层出现了意外依赖: {imported}")
+
+    def test_cli_entry_exists(self):
+        self.assertTrue(callable(self.td.main))
+
+    def test_builtin_library_valid(self):
+        from tools import CATEGORIES, TOOLS
+        self.assertEqual(self.td.check_tool_library(TOOLS, CATEGORIES), [])
+
+    def test_detects_duplicate_names(self):
+        t = {"name": "A", "category": "c",
+             "versions": [{"label": "1", "url": "https://a/x"}]}
+        errs = self.td.check_tool_library([t, dict(t)], ["c"])
+        self.assertTrue(any("重复" in e for e in errs), errs)
+
+    def test_detects_duplicate_labels(self):
+        v = {"label": "1", "url": "https://a/x"}
+        t = {"name": "A", "category": "c", "versions": [v, dict(v)]}
+        errs = self.td.check_tool_library([t], ["c"])
+        self.assertTrue(any("标签重复" in e for e in errs), errs)
+
+    def test_detects_unknown_category(self):
+        t = {"name": "A", "category": "nope",
+             "versions": [{"label": "1", "url": "https://a/x"}]}
+        errs = self.td.check_tool_library([t], ["c"])
+        self.assertTrue(any("未在 CATEGORIES" in e for e in errs), errs)
+
+    def test_detects_empty_category(self):
+        t = {"name": "A", "category": "c",
+             "versions": [{"label": "1", "url": "https://a/x"}]}
+        errs = self.td.check_tool_library([t], ["c", "empty"])
+        self.assertTrue(any("没有任何工具" in e for e in errs), errs)
+
+    def test_empty_library_is_error(self):
+        self.assertTrue(self.td.check_tool_library([]))
+
+    def test_non_list_is_error(self):
+        self.assertTrue(self.td.check_tool_library({"a": 1}))
+
+    def test_app_reexports_validate_tool(self):
+        """app.py 应对外保持 validate_tool 名称(向后兼容)"""
+        self.assertIs(app.validate_tool, self.td.validate_tool)
+
+    def test_app_deploy_types_reexported(self):
+        self.assertEqual(app.DEPLOY_TYPES, self.td.DEPLOY_TYPES)
+
+    def test_main_returns_zero_for_builtin(self):
+        self.assertEqual(self.td.main([]), 0)
+
+    def test_main_stats_flag(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self.td.main(["--stats"])
+        out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("[OK]", out)
+        # --stats 应逐分类列出工具名
+        for cat in ("语言运行时", "开发环境 (IDE)", "构建工具"):
+            self.assertIn(cat, out)
+
+    def test_main_without_stats_is_quiet(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.td.main([])
+        self.assertNotIn("语言运行时 (", buf.getvalue())
+
+
 class TestBuiltinToolsData(unittest.TestCase):
     """内置工具库完整性"""
 
@@ -512,6 +606,36 @@ class TestBuiltinToolsData(unittest.TestCase):
                           app.DEPLOY_TYPES,
                           f"{t['name']} 的 deploy.type 非法")
 
+    def test_category_declared(self):
+        """每个工具的分类都必须在 CATEGORIES 中声明"""
+        from tools import CATEGORIES
+        for t in self.tools:
+            self.assertIn(t["category"], CATEGORIES,
+                          f"{t['name']} 的分类 {t['category']} 未在 "
+                          f"CATEGORIES 中声明")
+
+    def test_category_not_empty(self):
+        from tools import CATEGORIES
+        self.assertTrue(CATEGORIES)
+        self.assertEqual(len(CATEGORIES), len(set(CATEGORIES)),
+                         "CATEGORIES 存在重复项")
+
+    def test_every_category_has_tools(self):
+        """空分类会让界面出现空白页签"""
+        from tools import CATEGORIES
+        used = {t["category"] for t in self.tools}
+        for c in CATEGORIES:
+            self.assertIn(c, used, f"分类「{c}」下没有任何工具")
+
+    def test_greenfield_tools_not_github(self):
+        """绿色版工具应来自非 GitHub 源(国内可用性优先)"""
+        for name in ("Apache Maven", "Gradle", "Flutter SDK"):
+            tool = next((t for t in self.tools if t["name"] == name), None)
+            self.assertIsNotNone(tool, f"缺少工具: {name}")
+            for v in tool["versions"]:
+                self.assertNotIn("github.com", v["url"],
+                                 f"{name} 使用了 GitHub 源, 国内不可用")
+
     def test_labels_unique_per_tool(self):
         for t in self.tools:
             labels = [v["label"] for v in t["versions"]]
@@ -531,6 +655,17 @@ class TestReadmeDocs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _count_tests():
+        """统计本文件中的 test_ 开头的用例数"""
+        import ast
+        src = (ROOT / "tests" / "test_app.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(src)
+        return sum(1 for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef)
+                   and n.name.startswith("test_"))
 
     def test_not_placeholder(self):
         self.assertGreater(len(self.readme.strip()), 200)
@@ -556,6 +691,30 @@ class TestReadmeDocs(unittest.TestCase):
         from tools import TOOLS
         self.assertIn(f"{len(TOOLS)} 款", self.readme,
                       "README 工具数量与 tools.py 不一致")
+
+    def test_test_count_matches(self):
+        """文档中声明的测试数量须与实际用例数一致(防漂移)"""
+        import re
+        actual = self._count_tests()
+        m = re.search(r"(\d+)\s*项", self.readme)
+        self.assertIsNotNone(m, "README 未声明测试数量")
+        self.assertEqual(int(m.group(1)), actual,
+                         f"README 声明 {m.group(1)} 项, "
+                         f"实际 {actual} 项")
+
+    def test_changelog_test_count_matches(self):
+        import re
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        m = re.search(r"(\d+)\s*项", changelog)
+        self.assertIsNotNone(m, "CHANGELOG 未声明测试数量")
+        self.assertEqual(int(m.group(1)), self._count_tests())
+
+    def test_no_stale_tool_count(self):
+        """「关于」对话框等位置不应残留旧工具数"""
+        src = (ROOT / "app.py").read_text(encoding="utf-8")
+        from tools import TOOLS
+        self.assertNotIn("22+ 款", src,
+                         "app.py 仍残留旧工具数量文案")
 
 
 class TestCustomToolsFileIO(unittest.TestCase):
