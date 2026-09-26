@@ -1,1 +1,203 @@
-# -
+# 编程工具下载器
+
+一款 Windows 平台的编程工具一键下载与静默部署工具。内置 22 款主流开发工具的官方直链，支持版本选择、批量部署、已安装状态检测。
+
+![CI](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
+![Deps](https://img.shields.io/badge/dependencies-stdlib%20only-success)
+
+## 快速开始
+
+从 [Releases](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases) 下载 `编程工具下载器.exe` 双击运行，或从源码执行 `run.bat`。
+
+无需安装 Python 环境，已打包为独立可执行文件。
+
+## 功能特性
+
+### 工具库
+
+| 分类 | 数量 | 工具 |
+| --- | --- | --- |
+| 语言运行时 | 6 | Python、Node.js、OpenJDK (Temurin)、Go、Rust、.NET SDK |
+| 开发环境 (IDE) | 4 | VS Code、IntelliJ IDEA、PyCharm、Eclipse |
+| 版本控制与命令行 | 5 | Git for Windows、GitHub Desktop、Windows Terminal、PowerShell 7、7-Zip |
+| 数据库与容器 | 7 | MySQL、PostgreSQL、MongoDB、SQLite、Docker Desktop、DBeaver、HeidiSQL |
+
+### 核心能力
+
+- **一键部署**：下载 + 静默安装一步完成，自动处理 MSI / EXE / 压缩包 / 自定义命令
+- **批量部署**：多选工具依次安装，单项失败自动跳过，完成时汇总成功与失败数
+- **多版本选择**：每个工具提供多个官方版本，按需切换
+- **已安装检测**：自动扫描注册表与磁盘，绿色 ✓ 标记已装工具
+- **下载引擎**：urllib 优先，Docker 等 CDN 自动降级 curl，断点信息与速度实时显示
+- **自动重试**：下载失败自动重试 2 次，仍失败可手动重试或跳转官网
+- **故障诊断**：下载失败时自动检测本机 hosts 是否屏蔽了目标域名并给出提示
+- **部署日志**：实时滚动日志，支持导出为文本文件
+
+### 界面操作
+
+- 搜索框支持**跨全部分类**搜索（输入关键词后自动突破当前分类）
+- 排序支持：默认 / 名称 A-Z / 名称 Z-A / 分类
+- 工具列表**右键菜单**：部署、下载、复制链接、查看详情、打开官网
+- 支持导入/导出自定义工具（JSON 格式），扩展工具库
+
+## 快捷键
+
+| 快捷键 | 功能 |
+| --- | --- |
+| `Ctrl+F` | 聚焦搜索框 |
+| `↑` `↓` | 切换选中工具 |
+| `Enter` | 一键部署（焦点在工具列表时） |
+| `Esc` | 取消当前下载 |
+| `Ctrl+O` | 打开下载目录 |
+| `Ctrl+E` | 导出工具列表 |
+| `Ctrl+I` | 导入自定义工具 |
+| `Ctrl+B` | 批量部署 |
+| `Ctrl+0` ~ `Ctrl+9` | 切换分类 |
+| 双击工具行 | 下载选中工具 |
+| `Ctrl+点击` | 多选工具 |
+
+## 自定义工具格式
+
+通过「导入工具」按钮加载 JSON 文件，支持两种结构：
+
+```json
+[
+  {
+    "name": "My Tool",
+    "category": "自定义",
+    "description": "工具说明",
+    "versions": [
+      { "label": "1.0.0", "url": "https://example.com/tool.zip" }
+    ],
+    "deploy": {
+      "type": "extract",
+      "verify": "C:\\Program Files\\My Tool\\*"
+    }
+  }
+]
+```
+
+或包裹格式 `{ "tools": [ ... ] }`。
+
+`deploy.type` 取值：
+
+| 类型 | 说明 |
+| --- | --- |
+| `msi` | MSI 包，`msiexec /quiet /norestart` 静默安装 |
+| `exe` | EXE 安装包，`args` 为静默参数，`need_admin` 触发 UAC |
+| `extract` | ZIP 压缩包，解压到同名目录 |
+| `custom` | 自定义命令，`cmd` 中可用 `{file}` `{user}` `{appdata}` 占位符 |
+| `none` | 不支持自动安装，跳转官网 |
+
+所有导入数据均经过强校验（名称、版本 URL 协议、部署类型白名单），非法项会被过滤。
+
+## 从源码运行
+
+```bash
+python app.py
+```
+
+依赖：仅 Python 标准库（tkinter、urllib、subprocess 等），无需 pip 安装任何第三方包。
+
+## 开发与测试
+
+```bash
+# 运行单元测试（108 项，不触网、不创建 GUI 窗口，约 0.03 秒）
+python -m unittest discover -s tests -v
+
+# 或使用 pytest
+python -m pytest tests -v
+
+# 代码卫生自检（语法、编码、未使用导入，仅标准库）
+python -m tests.selfcheck
+```
+
+测试覆盖文件名净化、自定义工具强校验、占位符替换、hosts 屏蔽诊断、CDN 站点判定、响应头与进度解析、已安装检测容错、内置工具数据完整性与 README 一致性。
+
+CI 在每次 push / PR 时自动运行上述检查（见 `.github/workflows/ci.yml`）。
+
+### 新增工具
+
+编辑 `tools.py`，在 `TOOLS` 列表中追加：
+
+```python
+{
+    "name": "工具名",
+    "category": "开发环境 (IDE)",
+    "description": "简介",
+    "versions": [
+        {"label": "1.0.0 (最新)", "url": "https://example.com/tool.zip"},
+    ],
+    "deploy": {"type": "extract", "verify": "C:\\Program Files\\Tool\\*"},
+    "homepage": "https://example.com",
+}
+```
+
+`validate_tool()` 会在启动与测试中校验全部定义，字段类型不符或协议非 http(s) 会被拒绝。
+
+## 打包为 EXE
+
+```bash
+pyinstaller --onefile --windowed --name "编程工具下载器" --icon app_icon.ico --noupx app.py
+```
+
+产物位于 `dist\编程工具下载器.exe`（约 11 MB）。二进制产物不入库，请通过 CI 或本地构建获取。
+
+## 配置文件
+
+| 文件 | 用途 |
+| --- | --- |
+| `config.json` | 保存下载目录等设置 |
+| `custom_tools.json` | 导入的自定义工具 |
+
+## 项目结构
+
+```
+Better-programming-tools-download/
+├── app.py                  # 主程序：GUI + 下载引擎 + 部署器
+├── tools.py                # 22 个工具的版本与部署配置
+├── app_icon.ico            # 应用图标
+├── run.bat                 # 启动脚本
+├── tests/
+│   ├── test_app.py         # 单元测试（108 项）
+│   ├── selfcheck.py        # 代码卫生自检
+│   └── __init__.py
+├── .github/
+│   └── workflows/ci.yml    # CI：测试 + 自检
+└── dist/                   # 打包输出（已 gitignore）
+    └── 编程工具下载器.exe
+```
+
+## 故障排查
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| 日志提示「被本机 hosts 屏蔽」 | 本机 hosts 把该域名指向了 `127.0.0.1`（常见于网络/拦截软件）。请检查 `C:\Windows\System32\drivers\etc\hosts` 或对应软件设置 |
+| JetBrains / Docker 下载很慢或首次报 404 | 这些 CDN 会拒绝「非浏览器 TLS 指纹 + 浏览器 UA」的组合，程序已内置 `prefer_curl` 直接用 curl 模式跳过失败尝试 |
+| GitHub 相关工具全部下载失败 | 多为 hosts 屏蔽或网络受限，同上；程序会在失败时自动诊断并提示 |
+| 安装时弹出 UAC 窗口 | 需管理员权限的安装（Docker、VS 类工具）属正常现象，点「是」即可 |
+
+## 安全说明
+
+- 下载文件名统一经过白名单净化（`safe_filename`），防止路径穿越与命令注入
+- 解压使用 Python 标准库，校验 Zip Slip 路径并限制解压总量（20 GB），防 zip bomb
+- 提权安装通过 PowerShell `-EncodedCommand` 传递，不拼接 shell 字符串；`need_admin` 传 `-PassThru` 回传真实退出码，失败不会误报成功
+- 自定义安装命令的占位符按上下文自动补引号，避免路径含空格被 shell 拆词
+- 导入数据经 `validate_tool()` 强校验：URL 仅允许 http(s)，杜绝 `file://` 读取本地文件
+- 需管理员权限的安装（如 Docker）会触发标准 UAC 弹窗
+
+## 贡献指南
+
+欢迎提交 Issue 与 PR：
+
+1. 保持改动聚焦，每个 PR 解决一件事
+2. 新增逻辑请在 `tests/test_app.py` 补充测试，确保 `python -m unittest discover -s tests` 通过
+3. 提交前运行 `python -m tests.selfcheck`
+4. 报告 bug 时请附上系统版本与日志面板输出
+
+## 许可
+
+见 [LICENSE](LICENSE)。
