@@ -1,0 +1,50 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 打包产物 (体积大, 由 CI/Releases 分发)
+build/
+dist/
+*.manifest
+*.spec.bak
+
+# 编译生成的安装包 (可执行文件不入库)
+# 注意: run.bat 是启动脚本(文本), 不受 *.exe 影响
+*.exe
+*.msi
+*.msixbundle
+
+# 运行时生成的配置与数据
+config.json
+custom_tools.json
+*.log
+
+# 日志导出
+部署日志_*.txt
+工具列表*.json
+
+# 测试与覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+Thumbs.db
+desktop.ini
+.DS_Store
+$RECYCLE.BIN/

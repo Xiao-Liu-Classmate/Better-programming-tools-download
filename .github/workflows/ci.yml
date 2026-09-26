@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 最小权限: 只需读取仓库内容
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # 本项目为 Windows 专用工具(Tkinter GUI + 静默安装),
+    # 选择 windows runner 以获得原生 tkinter 与一致的环境
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # 注意: 本项目仅依赖标准库, 无 requirements.txt,
+          # 因此不启用 cache: pip(缺依赖文件会导致该步骤报错)
+
+      - name: 语法检查
+        run: |
+          python -X utf8 -m py_compile app.py tools.py tests/test_app.py tests/selfcheck.py
+          echo "语法检查通过"
+
+      - name: 运行单元测试
+        run: |
+          python -X utf8 -m unittest discover -s tests -v
+
+      - name: 校验内置工具数据完整性
+        run: |
+          python -X utf8 -m tests.selfcheck
+
+  lint:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 代码卫生检查(仅标准库, 无需联网安装)
+        run: |
+          python -X utf8 -m tests.selfcheck
