@@ -2,7 +2,13 @@
 
 一款 Windows 平台的编程工具一键下载与静默部署工具。内置 22 款主流开发工具的官方直链，支持版本选择、批量部署、已安装状态检测。
 
-![CI](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/actions/workflows/ci.yml/badge.svg)
+**[Gitee](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download) · [GitHub](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download)**
+
+| 平台 | 状态 |
+| --- | --- |
+| Gitee (master) | [![Gitee](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download/badge.svg)](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download) |
+| GitHub (main) | [![CI](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/actions/workflows/ci.yml/badge.svg)](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/actions/workflows/ci.yml) |
+
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
@@ -10,9 +16,14 @@
 
 ## 快速开始
 
-从 [Releases](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases) 下载 `编程工具下载器.exe` 双击运行，或从源码执行 `run.bat`。
+从源码执行 `run.bat` 即可运行；也可自行打包为独立 exe（见下方「打包为 EXE」，约 11 MB，无需安装 Python 环境）。
 
-无需安装 Python 环境，已打包为独立可执行文件。
+## 下载
+
+- Gitee：仓库主页 → 「发行版 / Releases」下载 `编程工具下载器.exe`
+- GitHub：<https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases>
+
+> 仓库不存储二进制文件（`.gitignore` 已排除 `dist/` 与 `*.exe`），可执行文件通过 Releases 或本地构建获取。
 
 ## 功能特性
 
@@ -117,7 +128,7 @@ python -m tests.selfcheck
 
 测试覆盖文件名净化、自定义工具强校验、占位符替换、hosts 屏蔽诊断、CDN 站点判定、响应头与进度解析、已安装检测容错、内置工具数据完整性与 README 一致性。
 
-CI 在每次 push / PR 时自动运行上述检查（见 `.github/workflows/ci.yml`）。
+CI 在 GitHub 侧每次 push / PR 时自动运行上述检查（见 `.github/workflows/ci.yml`）；Gitee 侧可使用「流水线」或本地执行同两条命令。
 
 ### 新增工具
 
