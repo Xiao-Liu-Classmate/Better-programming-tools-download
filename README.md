@@ -20,10 +20,22 @@
 
 ## 下载
 
-- Gitee：仓库主页 → 「发行版 / Releases」下载 `编程工具下载器.exe`
-- GitHub：<https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases>
+**GitHub Releases（v4.0.0）**
+<https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases/tag/v4.0.0>
+
+下载附件 `Programming-Tools-Downloader-v4.0.0.exe`（11.06 MB），双击即可运行，无需安装 Python 环境。
+
+> 附件采用 ASCII 文件名，以避免部分 Windows 环境下的中文文件名乱码与杀毒软件误报，功能完全一致。
+
+**Gitee**：仓库主页 → 「发行版 / Releases」
 
 > 仓库不存储二进制文件（`.gitignore` 已排除 `dist/` 与 `*.exe`），可执行文件通过 Releases 或本地构建获取。
+
+**校验值**（v4.0.0）
+
+```
+SHA256: 3B5934E0E1E55A3411F33F9B02D17C642122DD47895911958CD5B3099B407375
+```
 
 ## 功能特性
 
