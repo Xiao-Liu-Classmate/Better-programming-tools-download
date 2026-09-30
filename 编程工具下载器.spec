@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='编程工具下载器',
+    name='Programming-Tools-Downloader',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

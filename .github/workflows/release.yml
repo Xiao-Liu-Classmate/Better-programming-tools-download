@@ -52,21 +52,25 @@ jobs:
       - name: 校验工具库
         run: python -X utf8 tooldata.py
 
-      - name: 安装 PyInstaller
-        run: python -m pip install --upgrade "pyinstaller==6.11.1"
+      - name: 安装构建依赖
+        # 必须同时装 pillow: 它是液态玻璃界面的渲染依赖。
+        # 曾因只装 pyinstaller 导致产物缺 Pillow(11MB 而非 33MB),
+        # 玻璃特效静默失效 —— 故下面还有一道产物校验。
+        run: |
+          python -m pip install --upgrade "pyinstaller==6.11.1" "pillow>=10,<12"
 
       - name: 打包 exe
-        # 参数与 README「打包为 EXE」章节一致
+        # 用 spec 文件而非命令行参数: spec 里显式声明了
+        # PIL.ImageTk 等 hiddenimports(它们是函数内延迟导入,
+        # 静态分析抓不到), 保证玻璃渲染模块被完整打包
         run: |
-          python -X utf8 -m PyInstaller --onefile --windowed --noupx `
-            --name "Programming-Tools-Downloader" `
-            --icon app_icon.ico app.py
+          python -X utf8 -m PyInstaller "编程工具下载器.spec"
 
       - name: 校验产物
         id: artifact
         shell: pwsh
         run: |
-          $exe = "dist\Programming-Tools-Downloader.exe"
+          $exe = "dist\编程工具下载器.exe"
           if (-not (Test-Path -LiteralPath $exe)) {
             Write-Error "未生成 $exe"
             exit 1
@@ -75,8 +79,18 @@ jobs:
           $sha  = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
           Write-Host "产物: $exe ($size 字节)"
           Write-Host "SHA256: $sha"
+          # 缺 Pillow 时产物约 11MB, 完整约 33MB
+          if ($size -lt 20MB) {
+            Write-Error ("产物仅 {0:N2} MB, 疑似未打包 Pillow —— " +
+                         "玻璃特效会失效" -f ($size / 1MB))
+            exit 1
+          }
           "size=$size" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "sha=$sha"   | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: 校验 Pillow 渲染模块已内嵌
+        run: |
+          python -X utf8 -c "import pathlib;d=pathlib.Path(r'dist\编程工具下载器.exe').read_bytes();m=['PIL.Image','PIL.ImageTk','PIL.ImageDraw','PIL.ImageFilter','PIL.ImageChops'];miss=[x for x in m if x.encode() not in d];print('Pillow 模块缺失:',miss) if miss else print('Pillow 模块完整');raise SystemExit(1 if miss else 0)"
 
       - name: 创建或更新 Release
         shell: pwsh
