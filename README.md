@@ -16,7 +16,7 @@
 
 ## 快速开始
 
-从源码执行 `run.bat` 即可运行；也可自行打包为独立 exe（见下方「打包为 EXE」，约 11 MB，无需安装 Python 环境）。
+从源码执行 `run.bat` 即可运行；也可自行打包为独立 exe（见下方「打包为 EXE」，约 33 MB，无需安装 Python 环境）。
 
 ## 下载
 
@@ -193,11 +193,18 @@ Gitee 免费版流水线仅提供 Linux 容器，而本项目是 Windows 专用�
 
 ## 打包为 EXE
 
+推荐使用 `build.spec`（其中声明了 `PIL.ImageTk` 等延迟导入模块的 `hiddenimports`，缺了会导致玻璃特效静默失效）：
+
 ```bash
-pyinstaller --onefile --windowed --name "编程工具下载器" --icon app_icon.ico --noupx app.py
+pip install pyinstaller pillow
+pyinstaller build.spec
 ```
 
-产物位于 `dist\编程工具下载器.exe`（约 11 MB）。二进制产物不入库，请通过 CI 或本地构建获取。
+产物位于 `dist\Programming-Tools-Downloader.exe`（约 33 MB，含 Pillow）。
+
+> 也可用命令行：`pyinstaller --onefile --windowed --noupx --name "Programming-Tools-Downloader" --icon app_icon.ico app.py`，但这样不会应用 spec 里的 `hiddenimports`，需自行确认 Pillow 已打包（产物应 ≥ 20 MB）。
+
+二进制产物不入库，请通过 Releases 或本地构建获取。
 
 ## 配置文件
 
@@ -213,8 +220,11 @@ Better-programming-tools-download/
 ├── app.py                  # 主程序：GUI + 下载引擎 + 部署器
 ├── tools.py                # 28 个工具的版本与部署配置
 ├── tooldata.py             # 零依赖数据层：工具校验与读写（CI 可独立运行）
+├── ui_theme.py             # 液态玻璃主题引擎（渐变背景/毛玻璃面板/渐变控件）
+├── ui_widgets.py           # 自绘玻璃控件（兼容 ttk 接口）
 ├── app_icon.ico            # 应用图标
 ├── run.bat                 # 启动脚本
+├── build.spec              # PyInstaller 打包配置（含 Pillow hiddenimports）
 ├── CHANGELOG.md            # 更新日志
 ├── tests/
 │   ├── test_app.py         # 单元测试（151 项）
