@@ -1,0 +1,139 @@
+name: Release
+
+# 推送 v* 形式的 tag 即自动完成全链路:
+#   跑测试 -> 打包 exe -> 创建/更新 Release -> 上传资产 -> 写入 SHA256
+# 测试失败会阻断发布, 避免把坏版本推给用户。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag (如 v4.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # 本项目是 Windows 专用工具(需要 tkinter), 必须在 Windows 上构建
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: 解析版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag }}"
+          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+          # 统一为 vX.Y.Z 形式
+          if ($tag -notmatch '^v') { $tag = "v$tag" }
+          $body = @{ tag = $tag } | ConvertTo-Json -Compress
+          $body | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "版本号: $tag"
+
+      - name: 语法检查
+        run: python -X utf8 -m py_compile app.py tools.py tooldata.py
+
+      - name: 运行单元测试
+        run: python -X utf8 -m unittest discover -s tests -v
+
+      - name: 校验工具库
+        run: python -X utf8 tooldata.py
+
+      - name: 安装 PyInstaller
+        run: python -m pip install --upgrade "pyinstaller==6.11.1"
+
+      - name: 打包 exe
+        # 参数与 README「打包为 EXE」章节一致
+        run: |
+          python -X utf8 -m PyInstaller --onefile --windowed --noupx `
+            --name "Programming-Tools-Downloader" `
+            --icon app_icon.ico app.py
+
+      - name: 校验产物
+        id: artifact
+        shell: pwsh
+        run: |
+          $exe = "dist\Programming-Tools-Downloader.exe"
+          if (-not (Test-Path -LiteralPath $exe)) {
+            Write-Error "未生成 $exe"
+            exit 1
+          }
+          $size = (Get-Item -LiteralPath $exe).Length
+          $sha  = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+          Write-Host "产物: $exe ($size 字节)"
+          Write-Host "SHA256: $sha"
+          "size=$size" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha=$sha"   | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: 创建或更新 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          $sha = "${{ steps.artifact.outputs.sha }}"
+          $size = "${{ steps.artifact.outputs.size }}"
+          $sizeMB = [math]::Round($size / 1MB, 2)
+
+          $notesFile = Join-Path $env:RUNNER_TEMP "notes.md"
+          # 用单引号 here-string: 双引号会吃掉三反引号, 破坏代码块渲染
+          $notes = @'
+          Windows 编程工具一键下载与静默部署工具。
+
+          **下载附件 `Programming-Tools-Downloader.exe` 双击即可运行。**
+
+          - 体积: __SIZE__ MB
+          - 依赖: 无(仅 Windows 自带 curl.exe 作为下载回退)
+
+          > 首次运行防火墙可能询问网络权限 —— 程序需要联网下载。
+
+          完整变更日志见仓库 CHANGELOG.md。
+          '@
+          $notes = $notes -replace '__SIZE__', $sizeMB
+          # 幂等追加 SHA256(重跑时先去掉旧行)
+          $notes = ($notes -split "`n" |
+                    Where-Object { $_ -notmatch '^SHA256:' }) -join "`n"
+          # 代码围栏用 [char]96 构造, 避免 YAML/PowerShell 双重转义踩坑
+          $fence = [char]96 * 3
+          $notes = $notes.TrimEnd() + "`n`n${fence}text`nSHA256: $sha`n${fence}`n"
+          $notes | Out-File -FilePath $notesFile -Encoding utf8
+
+          gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title $tag --notes-file $notesFile
+            if ($LASTEXITCODE -ne 0) { Write-Error "创建 Release 失败"; exit 1 }
+          } else {
+            gh release edit $tag --notes-file $notesFile
+            if ($LASTEXITCODE -ne 0) { Write-Error "更新 Release 失败"; exit 1 }
+          }
+
+      - name: 上传资产
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.ver.outputs.tag }}" `
+            "dist\Programming-Tools-Downloader.exe" --clobber
+          # 退出码必须立即检查, 否则被后续命令覆盖造成假绿
+          if ($LASTEXITCODE -ne 0) { Write-Error "上传失败"; exit 1 }
+          Write-Host "上传成功"
+
+      - name: 上验证结果
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ steps.ver.outputs.tag }}" --json assets,body
+          if ($LASTEXITCODE -ne 0) { Write-Error "验证失败"; exit 1 }

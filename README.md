@@ -20,22 +20,24 @@
 
 ## 下载
 
-**GitHub Releases（v4.0.0）**
-<https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases/tag/v4.0.0>
+**v4.0.0 发行版**
 
-下载附件 `Programming-Tools-Downloader-v4.0.0.exe`（11.06 MB），双击即可运行，无需安装 Python 环境。
+| 平台 | 附件 | 链接 |
+| --- | --- | --- |
+| GitHub | `Programming-Tools-Downloader-v4.0.0.exe` | [下载](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases/tag/v4.0.0) |
+| Gitee | `编程工具下载器.exe` | [下载](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download/releases/tag/v4.0.0) |
 
-> 附件采用 ASCII 文件名，以避免部分 Windows 环境下的中文文件名乱码与杀毒软件误报，功能完全一致。
+两侧附件均为 11.06 MB，内容完全一致（SHA256 相同）。双击即可运行，无需安装 Python 环境。
 
-**Gitee**：仓库主页 → 「发行版 / Releases」
+> GitHub 侧附件采用 ASCII 文件名，以避免部分 Windows 环境下的中文文件名乱码与杀毒软件误报；Gitee 侧保留中文名。
 
-> 仓库不存储二进制文件（`.gitignore` 已排除 `dist/` 与 `*.exe`），可执行文件通过 Releases 或本地构建获取。
-
-**校验值**（v4.0.0）
+**校验值**（两平台通用）
 
 ```
 SHA256: 3B5934E0E1E55A3411F33F9B02D17C642122DD47895911958CD5B3099B407375
 ```
+
+> 仓库不存储二进制文件（`.gitignore` 已排除 `dist/` 与 `*.exe`），可执行文件通过 Releases 或本地构建获取。
 
 ## 功能特性
 

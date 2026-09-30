@@ -1,15 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller 打包配置
-#
-# 手动打包 (推荐, 会自动更新本文件):
-#   pyinstaller --onefile --windowed --name "编程工具下载器" \
-#               --icon app_icon.ico --noupx app.py
-#
-# 或直接使用本文件:
-#   pyinstaller 编程工具下载器.spec
-#
-# 产物: dist\编程工具下载器.exe (约 11 MB)
-# 说明: upx=False —— UPX 压缩易被杀软误报, 体积差异可忽略
+
 
 a = Analysis(
     ['app.py'],
