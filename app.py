@@ -41,7 +41,7 @@ from tools import TOOLS, CATEGORIES
 
 # ─────────────────────── 常量 ───────────────────────
 
-APP_VERSION = "4.0.0"
+APP_VERSION = "4.1.0"
 APP_TITLE = f"编程工具下载器 v{APP_VERSION}"
 
 USER_AGENT = (
@@ -2416,7 +2416,10 @@ class App:
             f"• 部署日志实时显示+导出\n"
             f"• 自动重试 (最多2次)\n"
             f"• 自动切换 urllib/curl 下载\n"
-            f"• 设置自动持久化\n\n"
+            f"• 设置自动持久化\n"
+            f"• 液态玻璃界面"
+            + ("" if UI.HAS_PIL else "(需安装 Pillow 才能显示)\n")
+            + f"\n\n"
             f"快捷键:\n"
             f"  Ctrl+F  聚焦搜索框\n"
             f"  ↑/↓     选择工具\n"
