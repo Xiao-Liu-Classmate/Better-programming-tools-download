@@ -64,6 +64,8 @@ jobs:
         # PIL.ImageTk 等 hiddenimports(它们是函数内延迟导入,
         # 静态分析抓不到), 保证玻璃渲染模块被完整打包
         run: |
+          # 注意: PyInstaller 以 **spec 文件名** 作为产物文件名,
+          # 而非 EXE 里的 name 字段, 故产物仍为中文名
           python -X utf8 -m PyInstaller "编程工具下载器.spec"
 
       - name: 校验产物
@@ -73,6 +75,8 @@ jobs:
           $exe = "dist\编程工具下载器.exe"
           if (-not (Test-Path -LiteralPath $exe)) {
             Write-Error "未生成 $exe"
+            Get-ChildItem dist -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "  dist: $($_.Name)" }
             exit 1
           }
           $size = (Get-Item -LiteralPath $exe).Length
@@ -90,7 +94,7 @@ jobs:
 
       - name: 校验 Pillow 渲染模块已内嵌
         run: |
-          python -X utf8 -c "import pathlib;d=pathlib.Path(r'dist\编程工具下载器.exe').read_bytes();m=['PIL.Image','PIL.ImageTk','PIL.ImageDraw','PIL.ImageFilter','PIL.ImageChops'];miss=[x for x in m if x.encode() not in d];print('Pillow 模块缺失:',miss) if miss else print('Pillow 模块完整');raise SystemExit(1 if miss else 0)"
+          python -X utf8 -c "import pathlib,glob;f=glob.glob(r'dist\*.exe');assert f,'dist 下无 exe';print('检查',f[0]);d=pathlib.Path(f[0]).read_bytes();m=['PIL.Image','PIL.ImageTk','PIL.ImageDraw','PIL.ImageFilter','PIL.ImageChops'];miss=[x for x in m if x.encode() not in d];print('Pillow 模块缺失:',miss) if miss else print('Pillow 模块完整');raise SystemExit(1 if miss else 0)"
 
       - name: 创建或更新 Release
         shell: pwsh
@@ -143,7 +147,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ steps.ver.outputs.tag }}" `
-            "dist\Programming-Tools-Downloader.exe" --clobber
+            "dist\编程工具下载器.exe" --clobber
           # 退出码必须立即检查, 否则被后续命令覆盖造成假绿
           if ($LASTEXITCODE -ne 0) { Write-Error "上传失败"; exit 1 }
           Write-Host "上传成功"
