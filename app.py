@@ -25,10 +25,12 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from tkinter import (
-    PanedWindow, StringVar, Tk,
+    StringVar, Tk,
     filedialog, messagebox, ttk,
 )
 
+import ui_theme as UI
+import ui_widgets as UIW
 from tooldata import (
     DEPLOY_TYPES,
     load_custom_tools as _load_custom_tools,
@@ -646,32 +648,12 @@ class App:
         self._config = load_config()
 
         root.title(APP_TITLE)
-        root.geometry("980x640")
-        root.minsize(820, 560)
+        root.geometry("1180x820")
+        root.minsize(1000, 700)
         self._set_icon(root)
-
-        style = ttk.Style(root)
-        style.theme_use("clam")
-        style.configure("Treeview",
-                         font=("Microsoft YaHei UI", 9),
-                         rowheight=28,
-                         background="#ffffff",
-                         fieldbackground="#ffffff")
-        style.configure("Treeview.Heading",
-                         font=("Microsoft YaHei UI", 9, "bold"),
-                         background="#f0f0f0")
-        style.configure("Status.TLabel",
-                         font=("Microsoft YaHei UI", 9),
-                         foreground="#555")
-        style.configure("TButton",
-                         font=("Microsoft YaHei UI", 9))
-        style.configure("TLabel",
-                         font=("Microsoft YaHei UI", 9))
-        style.configure("TEntry",
-                         font=("Microsoft YaHei UI", 9))
-        style.configure(
-            "green.Horizontal.TProgressbar",
-            troughcolor="#e0e0e0", background="#4caf50")
+        self._init_theme(root)
+        self._build_background(root)
+        self._apply_ttk_styles()
 
         default_dir = self._config.get(
             "save_dir",
@@ -752,99 +734,438 @@ class App:
         except Exception:
             pass
 
+    # ──────────── 主题 / 视觉 ────────────
+
+    def _init_theme(self, root):
+        """初始化液态玻璃主题: 字体、调色板、窗口底色"""
+        self._pal = UI.Palette
+        self._fonts = UI.load_fonts()
+        self._bg_photo = None
+        self._bg_pil = None          # 供玻璃面板取切片
+        self._bg_id = None
+        self._bg_size = (0, 0)
+        self._bg_pending = None
+        self._color_key_ok = False
+        self._panels = []            # 已创建的玻璃面板(背景变化时重绘)
+        try:
+            root.configure(bg=self._pal.BG_MID_HEX)
+        except tk.TclError:
+            pass
+        # 让 Treeview 在深色底上正常显示
+        try:
+            style = ttk.Style(root)
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+    def _build_background(self, root):
+        """铺一层 Pillow 生成的渐变光晕背景。
+
+        Tk 不支持 backdrop-filter 与"只让某一层透明"。用
+        -transparentcolor 做色键透明是**错的** —— 同色即全透明,
+        会把 Treeview / 日志区 / 卡片等同样使用该底色的控件一起
+        挖空(实测整窗变黑)。
+
+        这里采用 pack 层叠: 背景 Canvas 先 pack 铺满 root, 三个
+        内容区域再依次 pack 到 root(排在 Canvas 之后即在其上方)。
+        玻璃卡片各自裁一块背景切片作底衬, 因此卡片区域能真正
+        "透出"光晕, 且与卡片外的背景连续。
+        """
+        if not UI.HAS_PIL:
+            self.content = root
+            return
+
+        key = self._pal.BG_MID_HEX
+
+        # 背景层: 用 place 而非 pack —— pack 会参与空间分配并把
+        # 其它 pack 控件挤走; place 完全不参与布局, 只是铺满一张底图
+        self.bg_canvas = tk.Canvas(
+            root, highlightthickness=0, bd=0, background=key)
+        self.bg_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        # Canvas.lower 需要 tagOrId, 缺参会抛 TclError
+        try:
+            self.bg_canvas.tag_lower("all")
+        except tk.TclError:
+            pass
+
+        root.bind("<Configure>", self._on_root_resize, add="+")
+        self.root.after(80, self._refresh_background)
+
+    def _on_root_resize(self, event=None):
+        # 只响应根窗口自身的事件
+        if event is not None and event.widget is not self.root:
+            return
+        w = max(2, self.root.winfo_width())
+        h = max(2, self.root.winfo_height())
+        if abs(w - self._bg_size[0]) < 24 and abs(h - self._bg_size[1]) < 24:
+            return
+        # 去抖: 背景是纯装饰, 拖动窗口时没必要每像素重建,
+        # 否则会阻塞主线程(生成一张全屏图并不便宜)
+        if self._bg_pending is not None:
+            return
+        try:
+            self._bg_pending = self.root.after(
+                180, self._do_refresh_background)
+        except tk.TclError:
+            self._bg_pending = None
+
+    def _do_refresh_background(self):
+        self._bg_pending = None
+        self._refresh_background()
+
+    def _glass(self, master, **kw):
+        """构造玻璃面板, 并注入背景切片回调(实现"透出")"""
+        p = UIW.GlassPanel(master, bg_provider=self._bg_slice, **kw)
+        self._panels.append(p)
+        return p
+
+    def _bg_slice(self, w, h):
+        """取窗口背景图的 (w, h) 区域, 供玻璃面板作为底衬。
+
+        没有整窗背景时返回 None, 面板退化为深色实底。
+        """
+        img = self._bg_pil
+        if img is None or w <= 0 or h <= 0:
+            return None
+        W, H = img.size
+        if W < w or H < h:
+            return None
+        # 按面板在窗口中的位置取对应区域, 保留背景的连续感
+        try:
+            x = max(0, min(W - w, self.winfo_rootx()
+                           - self.root.winfo_rootx()))
+            y = max(0, min(H - h, self.winfo_rooty()
+                           - self.root.winfo_rooty()))
+        except Exception:
+            return None
+        return img.crop((x, y, x + w, y + h))
+
+    def _refresh_background(self):
+        """生成并显示背景图(限流, 避免拖动窗口时卡顿)"""
+        if not UI.HAS_PIL:
+            return
+        if self._closing:
+            return
+        w = max(2, self.root.winfo_width())
+        h = max(2, self.root.winfo_height())
+        if w < 100 or h < 100:
+            return
+        if abs(w - self._bg_size[0]) < 24 and abs(h - self._bg_size[1]) < 24:
+            return
+        self._bg_size = (w, h)
+        try:
+            img = UI.make_background(w, h, self._pal)
+        except Exception:
+            return
+        if img is None:
+            return
+        from PIL import ImageTk
+        self._bg_pil = img
+        self._bg_photo = ImageTk.PhotoImage(img)
+        if self._bg_id is None:
+            self._bg_id = self.bg_canvas.create_image(
+                0, 0, anchor="nw", image=self._bg_photo)
+        else:
+            self.bg_canvas.itemconfigure(
+                self._bg_id, image=self._bg_photo)
+        # 背景变了, 各玻璃面板的底衬切片需重算
+        if not self._closing:
+            try:
+                self.root.after_idle(self._refresh_panels)
+            except tk.TclError:
+                pass
+
+    def _refresh_panels(self):
+        """通知所有玻璃面板重绘(背景切片变了)"""
+        for w in self._panels:
+            try:
+                w.set_bg_provider(self._bg_slice)
+            except Exception:
+                pass
+
+    def _apply_ttk_styles(self):
+        """深度定制 ttk 控件, 使其融入深色玻璃主题"""
+        p = self._pal
+        f = self._fonts
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        # Treeview(工具列表 / 分类)
+        style.configure(
+            "Glass.Treeview",
+            background=p.BG_MID_HEX,
+            fieldbackground=p.BG_MID_HEX,
+            foreground=p.TREE_FG,
+            rowheight=34,
+            borderwidth=0,
+            relief="flat",
+            font=(f["ui"], 9))
+        style.map(
+            "Glass.Treeview",
+            background=[("selected", "#4F8BFF")],
+            foreground=[("selected", "#FFFFFF")])
+        style.layout("Glass.Treeview", [(
+            "Glass.Treeview.treearea", {"sticky": "nswe"})])
+        style.configure(
+            "Glass.Treeview.Heading",
+            background=p.BG_MID_HEX,
+            foreground=p.TREE_HEAD_FG,
+            relief="flat",
+            borderwidth=0,
+            padding=(8, 9),
+            font=(f["ui_bold"], 9))
+        style.map(
+            "Glass.Treeview.Heading",
+            background=[("active", p.BG_MID_HEX)])
+        # 去掉表头默认的按钮/边框元素, 保留纯标签
+        style.layout("Glass.Treeview.Heading", [
+            ("Glass.Treeview.Heading.label", {"sticky": "nswe"})])
+
+        # 滚动条: 细窄无边框
+        style.configure(
+            "Glass.Vertical.TScrollbar",
+            background=p.BG_MID_HEX,
+            troughcolor=p.BG_MID_HEX,
+            bordercolor=p.BG_MID_HEX,
+            lightcolor="#5A6484",
+            darkcolor="#3A4260",
+            arrowcolor=p.TEXT_DIM,
+            relief="flat",
+            borderwidth=0,
+            width=11)
+        style.map(
+            "Glass.Vertical.TScrollbar",
+            background=[("active", "#4A5578")])
+
+        # 标签
+        # 用自定义 element 去掉 clam 主题默认的 focus 高亮边框,
+        # 否则文字后面会出现一块深色矩形。
+        # element_create 重复注册会抛错, 故先探测。
+        try:
+            style.element_create(
+                "GlassLabel", "from", "clam.Label",
+                bordercolor=p.BG_MID_HEX, lightcolor=p.BG_MID_HEX,
+                darkcolor=p.BG_MID_HEX, padding=0)
+        except tk.TclError:
+            pass
+        for nm, fg in (("Glass.TLabel", p.TEXT),
+                       ("Glass.Dim.TLabel", p.TEXT_DIM),
+                       ("Glass.Status.TLabel", p.TEXT),
+                       ("Glass.Faint.TLabel", p.TEXT_FAINT),
+                       ("Glass.Title.TLabel", p.TEXT),
+                       ("Glass.Sub.TLabel", p.TEXT_FAINT)):
+            style.configure(nm, background=p.BG_MID_HEX,
+                            foreground=fg, borderwidth=0,
+                            relief="flat", element="GlassLabel")
+        style.configure("Glass.Title.TLabel",
+                        font=(f["title"], 15, "bold"))
+        style.configure("Glass.Sub.TLabel", font=(f["ui"], 8))
+        style.configure("Glass.Faint.TLabel", font=(f["ui"], 8))
+        style.configure("Glass.Dim.TLabel", font=(f["ui"], 9))
+
+        # 通用 Frame: 透明
+        style.configure("Glass.TFrame", background=p.BG_MID_HEX)
+
+        # Combobox
+        style.configure(
+            "Glass.TCombobox",
+            fieldbackground=p.BG_MID_HEX, background=p.BG_MID_HEX,
+            foreground=p.TEXT, arrowcolor=p.TEXT_DIM,
+            bordercolor=p.BG_MID_HEX, lightcolor=p.BG_MID_HEX,
+            darkcolor=p.BG_MID_HEX, borderwidth=0, relief="flat",
+            padding=(10, 7), font=(f["ui"], 9))
+        style.map(
+            "Glass.TCombobox",
+            fieldbackground=[("readonly", p.BG_MID_HEX)],
+            foreground=[("readonly", p.TEXT)],
+            selectbackground=[("readonly", p.BG_MID_HEX)],
+            selectforeground=[("readonly", p.TEXT)])
+        self.root.option_add(
+            "*TCombobox*Listbox.background", p.BG_MID_HEX)
+        self.root.option_add(
+            "*TCombobox*Listbox.foreground", p.TEXT)
+        self.root.option_add(
+            "*TCombobox*Listbox.selectBackground", "#4F8BFF")
+        self.root.option_add(
+            "*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        self.root.option_add(
+            "*TCombobox*Listbox.font", (f["ui"], 9))
+
+        # 文本控件通用
+        # 注: 进度条与输入框已换成 UIW.GlassProgress / GlassEntry
+        # (均非 ttk 控件, 不吃 style), 此处不再配置 ttk 版本 ——
+        # 且 Palette 里 TROUGH 是 4 元组, 传给 ttk.Style 会抛
+        # "bad color" 导致程序无法启动。
+
+    def _btn(self, master, text, command, width=104, height=34,
+             accent=False):
+        """快捷构造玻璃按钮"""
+        return UIW.GlassButton(
+            master, text=text, command=command, width=width,
+            height=height, accent=accent,
+            font=(self._fonts["ui"], 9))
+
+    def _status_sub(self):
+        """标题下方的副标题(工具总数与分类数)"""
+        try:
+            n_tool = len(TOOLS)
+            n_cat = len([c for c in CATEGORIES])
+            n_ver = sum(len(t.get("versions", [])) for t in TOOLS)
+            return (f"{n_tool} 款工具 · {n_ver} 条官方直链 · "
+                    f"{n_cat} 个分类")
+        except Exception:
+            return ""
+
+    def _label(self, master, text="", style="Glass.TLabel", **kw):
+        return ttk.Label(master, text=text, style=style, **kw)
+
     # ──────────── 界面 ────────────
 
     def _build_top(self):
-        top = ttk.Frame(self.root, padding=(10, 8, 10, 0))
-        top.pack(fill="x")
+        wrap = ttk.Frame(self.root, style="Glass.TFrame")
+        wrap.pack(fill="x", padx=18, pady=(16, 0))
 
-        ttk.Label(top, text="保存目录:").grid(
-            row=0, column=0, sticky="w")
-        self.dir_entry = ttk.Entry(top, textvariable=self.save_dir)
-        self.dir_entry.grid(row=0, column=1, sticky="ew", padx=6)
-        ttk.Button(
-            top, text="浏览...",
-            command=self._browse_dir).grid(row=0, column=2)
+        # ── 标题区
+        head = ttk.Frame(wrap, style="Glass.TFrame")
+        head.pack(fill="x")
+        title_box = ttk.Frame(head, style="Glass.TFrame")
+        title_box.pack(side="left")
+        ttk.Label(title_box, text=APP_TITLE.split(" v")[0],
+                  style="Glass.Title.TLabel").pack(anchor="w")
+        ttk.Label(title_box, text=self._status_sub(),
+                  style="Glass.Sub.TLabel").pack(anchor="w",
+                                                pady=(1, 0))
 
-        ttk.Label(top, text="搜索:").grid(
-            row=1, column=0, sticky="w", pady=(6, 0))
-        self.search_entry = ttk.Entry(top, textvariable=self.keyword)
-        self.search_entry.grid(
-            row=1, column=1, sticky="ew", padx=6, pady=(6, 0))
+        # 右侧工具按钮组
+        tools_row = ttk.Frame(head, style="Glass.TFrame")
+        tools_row.pack(side="right", pady=(4, 0))
+        self._btn(tools_row, "导入工具", self._import_tools,
+                  width=92, height=32).pack(side="left", padx=(0, 8))
+        self._btn(tools_row, "导出列表", self._export_tools,
+                  width=92, height=32).pack(side="left", padx=(0, 8))
+        self._btn(tools_row, "刷新状态",
+                  lambda: self._refresh_installed(update_status=True),
+                  width=92, height=32).pack(side="left")
+
+        # ── 搜索 + 排序 + 保存目录
+        bar = self._glass(wrap, radius=16)
+        bar.pack(fill="x", pady=(12, 0))
+        inner = ttk.Frame(bar, style="Glass.TFrame")
+        inner.pack(fill="x", padx=16, pady=12)
+
+        # 第一行: 搜索
+        ttk.Label(inner, text="搜索", style="Glass.Faint.TLabel").pack(
+            side="left")
+        self.search_entry = UIW.GlassEntry(
+            inner, textvariable=self.keyword,
+            font=(self._fonts["ui"], 9))
+        self.search_entry.pack(side="left", fill="x", expand=True,
+                               padx=(10, 10))
         self.keyword.trace_add(
             "write", lambda *_: self.filter_tools())
         self.search_entry.bind("<Return>", self._on_search_return)
 
-        ttk.Label(top, text="排序:").grid(
-            row=1, column=2, sticky="w", padx=(6, 0),
-            pady=(6, 0))
+        ttk.Label(inner, text="排序", style="Glass.Faint.TLabel").pack(
+            side="left", padx=(0, 8))
         self._sort_var = StringVar(value="默认")
         sort_combo = ttk.Combobox(
-            top, textvariable=self._sort_var,
+            inner, textvariable=self._sort_var,
             values=["默认", "名称 A-Z", "名称 Z-A", "分类"],
-            state="readonly", width=10)
-        sort_combo.grid(row=1, column=3, padx=(4, 6),
-                        pady=(6, 0))
+            state="readonly", width=10, style="Glass.TCombobox")
+        sort_combo.pack(side="left")
         sort_combo.bind(
             "<<ComboboxSelected>>",
             lambda _: self.filter_tools())
 
-        ttk.Button(
-            top, text="刷新状态",
-            command=lambda: self._refresh_installed(
-                update_status=True)).grid(
-            row=1, column=4, padx=(4, 0), pady=(6, 0))
-        ttk.Button(
-            top, text="导出工具列表",
-            command=self._export_tools).grid(
-            row=1, column=5, padx=(4, 0), pady=(6, 0))
-        ttk.Button(
-            top, text="导入工具",
-            command=self._import_tools).grid(
-            row=1, column=6, padx=(4, 0), pady=(6, 0))
-
-        top.columnconfigure(1, weight=1)
+        # 第二行: 保存目录
+        dir_row = ttk.Frame(inner, style="Glass.TFrame")
+        dir_row.pack(fill="x", pady=(10, 0))
+        ttk.Label(dir_row, text="保存到",
+                  style="Glass.Faint.TLabel").pack(side="left")
+        self.dir_entry = UIW.GlassEntry(
+            dir_row, textvariable=self.save_dir,
+            font=(self._fonts["mono"], 8))
+        self.dir_entry.pack(side="left", fill="x", expand=True,
+                            padx=(10, 10))
+        self._btn(dir_row, "浏览…", self._browse_dir,
+                  width=88, height=32).pack(side="left")
 
     def _build_main(self):
-        pane = PanedWindow(self.root, orient="horizontal")
-        pane.pack(fill="both", expand=True, padx=10, pady=8)
+        pane = ttk.Frame(self.root, style="Glass.TFrame")
+        pane.pack(fill="both", expand=True, padx=18, pady=(14, 0))
 
-        # 左: 分类
-        left = ttk.Frame(pane)
+        # ── 左: 分类(玻璃侧栏)
+        left = self._glass(pane, radius=18)
+        left.pack(side="left", fill="y")
+        # 不锁宽高: 让 Treeview 的列宽决定面板宽度、高度由内容决定,
+        # 避免侧栏下方出现大片留白
+        left.pack_propagate(True)
+
+        left_body = ttk.Frame(left, style="Glass.TFrame")
+        left_body.pack(fill="both", expand=True, padx=UIW.PAD,
+                       pady=UIW.PAD)
+
+        ttk.Label(left_body, text="分类",
+                  style="Glass.Faint.TLabel",
+                  anchor="w").pack(fill="x", padx=4, pady=(0, 8))
+
+        # 分类数量有限, 用 pack 而非 expand 让树按内容高度收缩,
+        # 避免侧栏下方出现大片空白
+        cat_holder = ttk.Frame(left_body, style="Glass.TFrame")
+        cat_holder.pack(fill="x")
+
         self.cat_tree = ttk.Treeview(
-            left, columns=("cat", "cnt"),
-            show="headings", selectmode="browse")
-        self.cat_tree.heading("cat", text="分类")
+            cat_holder, columns=("cat", "cnt"),
+            show="headings", selectmode="browse",
+            style="Glass.Treeview")
+        self.cat_tree.heading("cat", text="名称")
         self.cat_tree.heading("cnt", text="数量")
-        self.cat_tree.column("cat", width=140, anchor="w",
+        self.cat_tree.column("cat", width=148, anchor="w",
                              stretch=True)
-        self.cat_tree.column("cnt", width=40, anchor="center",
+        self.cat_tree.column("cnt", width=46, anchor="e",
                              stretch=False)
-        self.cat_tree.pack(fill="both", expand=True)
+        self.cat_tree.pack(fill="x")
         self.cat_tree.bind(
             "<<TreeviewSelect>>", self._on_category_select)
-        pane.add(left)
 
-        # 右: 工具列表 (多选)
-        right = ttk.Frame(pane)
+        # 快捷提示
+        ttk.Label(left_body,
+                  text="Ctrl+数字 快速切换\n双击工具 开始下载",
+                  style="Glass.Sub.TLabel",
+                  justify="left").pack(fill="x", padx=4, pady=(14, 0))
+
+        # ── 右: 工具列表
+        right = self._glass(pane, radius=18)
+        right.pack(side="left", fill="both",
+                   expand=True, padx=(14, 0))
+
+        right_body = ttk.Frame(right, style="Glass.TFrame")
+        right_body.pack(fill="both", expand=True,
+                        padx=UIW.PAD, pady=UIW.PAD)
+
         self.tool_tree = ttk.Treeview(
-            right, columns=("name", "ver", "desc", "inst"),
-            show="headings", selectmode="extended")
+            right_body, columns=("name", "ver", "desc", "inst"),
+            show="headings", selectmode="extended",
+            style="Glass.Treeview")
         self.tool_tree.heading("name", text="工具")
         self.tool_tree.heading("ver", text="版本")
         self.tool_tree.heading("desc", text="说明")
         self.tool_tree.heading("inst", text="状态")
-        self.tool_tree.column("name", width=180, anchor="w",
+        self.tool_tree.column("name", width=196, anchor="w",
                               stretch=False)
-        self.tool_tree.column("ver", width=120, anchor="w",
+        self.tool_tree.column("ver", width=132, anchor="w",
                               stretch=False)
-        self.tool_tree.column("desc", width=320, anchor="w",
+        self.tool_tree.column("desc", width=330, anchor="w",
                               stretch=True)
-        self.tool_tree.column("inst", width=60, anchor="center",
+        self.tool_tree.column("inst", width=86, anchor="center",
                               stretch=False)
 
-        vsb = ttk.Scrollbar(right, orient="vertical",
-                             command=self.tool_tree.yview)
+        vsb = ttk.Scrollbar(right_body, orient="vertical",
+                             command=self.tool_tree.yview,
+                             style="Glass.Vertical.TScrollbar")
         self.tool_tree.configure(yscrollcommand=vsb.set)
         self.tool_tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
@@ -854,7 +1175,6 @@ class App:
             "<<TreeviewSelect>>", self._on_tool_select)
         # 右键菜单
         self.tool_tree.bind("<Button-3>", self._show_context_menu)
-        pane.add(right)
 
     def _show_context_menu(self, event):
         """工具列表右键菜单"""
@@ -874,8 +1194,20 @@ class App:
                 self._ctx_menu.destroy()
             except Exception:
                 pass
-        menu = tk.Menu(self.root, tearoff=0)
+        menu = tk.Menu(
+            self.root,
+            bg=self._pal.BG_BOT_HEX,
+            fg=self._pal.TEXT,
+            activebackground=self._pal.ACCENT_A_HEX,
+            activeforeground="#FFFFFF",
+            bd=0, relief="flat",
+            font=(self._fonts["ui"], 9),
+            tearoff=0)
         self._ctx_menu = menu
+        try:
+            menu.configure(highlightthickness=0)
+        except tk.TclError:
+            pass
 
         menu.add_command(label="一键部署",
                          command=self.start_deploy)
@@ -1052,100 +1384,131 @@ class App:
             f"详情 - {tool['name']}", "\n".join(lines))
 
     def _build_bottom(self):
-        bottom = ttk.Frame(self.root, padding=(10, 0, 10, 10))
-        bottom.pack(fill="x")
+        bottom = ttk.Frame(self.root, style="Glass.TFrame")
+        bottom.pack(fill="x", padx=18, pady=(14, 14))
 
-        self.status = StringVar(
-            value="就绪 - 双击工具即可开始下载")
-        ttk.Label(bottom, textvariable=self.status, anchor="w",
-                  style="Status.TLabel").pack(fill="x")
+        # ── 上: 状态 + 进度(单行紧凑布局)
+        prog_card = self._glass(bottom, radius=18)
+        prog_card.pack(fill="x")
+        prog_in = ttk.Frame(prog_card, style="Glass.TFrame")
+        prog_in.pack(fill="x", padx=18, pady=13)
 
-        bar_row = ttk.Frame(bottom)
-        bar_row.pack(fill="x", pady=(4, 0))
-        self.progress = ttk.Progressbar(
-            bar_row, mode="determinate",
-            style="green.Horizontal.TProgressbar")
-        self.progress.pack(side="left", fill="x", expand=True)
+        self.status = StringVar(value="就绪 — 双击工具即可开始下载")
+        self.status_label = ttk.Label(
+            prog_in, textvariable=self.status,
+            style="Glass.Status.TLabel", takefocus=0)
+        self.status_label.pack(
+            side="left", fill="x", expand=False)
+
         self.progress_label = ttk.Label(
-            bar_row, text="", width=36, anchor="e")
-        self.progress_label.pack(side="right", padx=(8, 0))
+            prog_in, text="", width=28, anchor="e",
+            style="Glass.Faint.TLabel")
+        self.progress_label.pack(side="right")
 
-        # URL 显示
+        self.progress = UIW.GlassProgress(
+            prog_in, height=8, mode="determinate", width=180)
+        self.progress.pack(side="right", padx=(14, 12))
+
+        # URL 显示(单独一行, 避免长链接挤压进度条)
+        # 初始为空时整行隐藏, 避免状态区出现无意义的空白条
         self.url_var = StringVar(value="")
+        url_row = ttk.Frame(prog_card, style="Glass.TFrame")
+        self._url_row = url_row
+        url_row.pack(fill="x", padx=18, pady=(0, 12))
         self.url_label = ttk.Label(
-            bottom, textvariable=self.url_var,
-            foreground="#888", font=("Consolas", 8),
-            anchor="w", cursor="hand2")
-        self.url_label.pack(fill="x", pady=(2, 0))
+            url_row, textvariable=self.url_var,
+            style="Glass.Faint.TLabel", anchor="w", cursor="hand2")
+        self.url_label.pack(fill="x", expand=True)
         self.url_label.bind("<Button-3>", self._copy_url)
         self.url_label.bind("<Button-1>", self._copy_url)
 
-        # 日志面板
-        log_frame = ttk.LabelFrame(bottom, text="部署日志",
-                                    padding=(4, 2))
-        log_frame.pack(fill="x", pady=(4, 0))
-        log_top = ttk.Frame(log_frame)
-        log_top.pack(fill="x")
-        ttk.Button(
-            log_top, text="清空日志",
-            command=self._clear_log).pack(side="right")
-        ttk.Button(
-            log_top, text="导出日志",
-            command=self._export_log).pack(
-            side="right", padx=(0, 6))
-        self.log_text = tk.Text(
-            log_frame, height=4, font=("Consolas", 8),
-            state="disabled", wrap="word",
-            background="#1e1e1e", foreground="#d4d4d4",
-            insertbackground="white",
-            relief="flat", padx=4, pady=2)
-        log_scroll = ttk.Scrollbar(
-            log_frame, orient="vertical",
-            command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        self.log_text.pack(side="left", fill="both",
-                           expand=True)
-        log_scroll.pack(side="right", fill="y")
+        # ── 下: 操作区 + 日志
+        act = self._glass(bottom, radius=18)
+        act.pack(fill="x", pady=(12, 0))
+        act_in = ttk.Frame(act, style="Glass.TFrame")
+        act_in.pack(fill="x", padx=16, pady=12)
 
-        btn_row = ttk.Frame(bottom)
-        btn_row.pack(fill="x", pady=(6, 0))
-        ttk.Label(btn_row, text="版本:").pack(side="left")
+        # 左: 版本 + 按钮
+        left_col = ttk.Frame(act_in, style="Glass.TFrame")
+        left_col.pack(side="left", fill="y")
+
+        btn_row = ttk.Frame(left_col, style="Glass.TFrame")
+        btn_row.pack(anchor="w")
+
+        ttk.Label(btn_row, text="版本",
+                  style="Glass.Faint.TLabel").pack(side="left")
         self.version_combo = ttk.Combobox(
-            btn_row, state="readonly", width=24)
-        self.version_combo.pack(side="left", padx=(4, 10))
+            btn_row, state="readonly", width=20,
+            style="Glass.TCombobox")
+        self.version_combo.pack(side="left", padx=(8, 12))
 
-        self.deploy_btn = ttk.Button(
-            btn_row, text="一键部署",
-            command=self.start_deploy)
-        self.deploy_btn.pack(side="left", padx=(0, 4))
+        self.deploy_btn = self._btn(
+            btn_row, "一键部署", self.start_deploy,
+            width=108, height=32, accent=True)
+        self.deploy_btn.pack(side="left")
 
-        self.batch_btn = ttk.Button(
-            btn_row, text="批量部署",
-            command=self.start_batch_deploy)
-        self.batch_btn.pack(side="left", padx=(0, 4))
+        self.batch_btn = self._btn(
+            btn_row, "批量部署", self.start_batch_deploy,
+            width=98, height=32)
+        self.batch_btn.pack(side="left", padx=(8, 0))
 
-        self.download_btn = ttk.Button(
-            btn_row, text="仅下载",
-            command=self.start_download)
-        self.download_btn.pack(side="left")
+        self.download_btn = self._btn(
+            btn_row, "仅下载", self.start_download, width=88, height=32)
+        self.download_btn.pack(side="left", padx=(8, 0))
 
-        self.retry_btn = ttk.Button(
-            btn_row, text="重试", command=self._retry_current)
-        self.retry_btn.pack(side="left", padx=(4, 0))
+        self.retry_btn = self._btn(
+            btn_row, "重试", self._retry_current, width=78, height=32)
+        self.retry_btn.pack(side="left", padx=(8, 0))
         self.retry_btn.pack_forget()     # 初始隐藏, 失败后再显示
 
-        self.cancel_btn = ttk.Button(
-            btn_row, text="取消",
-            command=self.cancel_download, state="disabled")
-        self.cancel_btn.pack(side="left", padx=8)
+        self.cancel_btn = self._btn(
+            btn_row, "取消", self.cancel_download, width=78, height=32)
+        self.cancel_btn.pack(side="left", padx=(8, 0))
+        self.cancel_btn.set_state("disabled")
 
-        ttk.Button(
-            btn_row, text="打开下载目录",
-            command=self.open_folder).pack(side="right")
-        ttk.Button(
-            btn_row, text="关于",
-            command=self._show_about).pack(side="right",
-                                           padx=(0, 6))
+        # 右: 日志
+        log_card = self._glass(act_in, radius=14)
+        log_card.pack(side="right", fill="both", expand=True,
+                      padx=(16, 0))
+
+        log_top = ttk.Frame(log_card, style="Glass.TFrame")
+        log_top.pack(fill="x", padx=(12, 12), pady=(8, 2))
+        ttk.Label(log_top, text="部署日志",
+                  style="Glass.Faint.TLabel").pack(side="left")
+        self._btn(log_top, "导出", self._export_log,
+                  width=58, height=24).pack(side="right")
+        self._btn(log_top, "清空", self._clear_log,
+                  width=58, height=24).pack(side="right", padx=(0, 6))
+
+        log_body = ttk.Frame(log_card, style="Glass.TFrame")
+        log_body.pack(fill="both", expand=True, padx=(12, 12),
+                      pady=(0, 10))
+        self.log_text = tk.Text(
+            log_body, height=3, font=(self._fonts["mono"], 8),
+            state="disabled", wrap="word",
+            background="#10132A", foreground="#C9D3EA",
+            insertbackground="#FFFFFF",
+            selectbackground="#4F8BFF", selectforeground="#FFFFFF",
+            relief="flat", borderwidth=0, highlightthickness=0,
+            padx=10, pady=6)
+        log_scroll = ttk.Scrollbar(
+            log_body, orient="vertical",
+            command=self.log_text.yview,
+            style="Glass.Vertical.TScrollbar")
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        self.log_text.pack(side="left", fill="both", expand=True)
+        log_scroll.pack(side="right", fill="y")
+
+        # ── 页脚
+        foot = ttk.Frame(bottom, style="Glass.TFrame")
+        foot.pack(fill="x", pady=(10, 0))
+        ttk.Label(foot, text="核心功能仅依赖标准库 · "
+                             "安装 Pillow 可获得玻璃特效",
+                  style="Glass.Sub.TLabel").pack(side="left")
+        self._btn(foot, "关于", self._show_about,
+                  width=72, height=26).pack(side="right")
+        self._btn(foot, "打开下载目录", self.open_folder,
+                  width=118, height=26).pack(side="right", padx=(0, 8))
 
     # ──────────── 分类 ────────────
 
@@ -1247,11 +1610,13 @@ class App:
                 tags=("installed",) if installed else ())
             count += 1
 
+        # tag 配色需适配深色玻璃主题: 原先用适配白底的深绿/浅蓝,
+        # 在深色底上会刺眼且对比不足
         self.tool_tree.tag_configure(
-            "installed", foreground="#2e7d32")
+            "installed", foreground=self._pal.OK_HEX)
         self.tool_tree.tag_configure(
-            "downloading", background="#e3f2fd",
-            foreground="#1565c0")
+            "downloading", background="#2A3550",
+            foreground=self._pal.ACCENT_C_HEX)
 
         if not update_status:
             return
@@ -1839,7 +2204,8 @@ class App:
         self.status.set(msg)
         if "失败" not in msg:
             return
-        self.retry_btn.pack(side="left", padx=(4, 0))
+        # 间距须与 _build_bottom 初始 pack 一致, 否则重显时按钮会跳动
+        self.retry_btn.pack(side="left", padx=(8, 0))
         tool = self._active_tool or self.current_tool
         homepage = tool.get("homepage") if tool else None
 
@@ -2019,7 +2385,7 @@ class App:
         self._clear_highlight()
         self.status.set(f"{tool_name}: {msg}")
         # 与下载失败保持一致: 提供手动重试入口
-        self.retry_btn.pack(side="left", padx=(4, 0))
+        self.retry_btn.pack(side="left", padx=(8, 0))
         tool = self._active_tool or self.current_tool
         homepage = tool.get("homepage") if tool else None
         text = f"{tool_name} {msg}"
@@ -2077,6 +2443,13 @@ class App:
         self._closing = True
         self.cancel_event.set()
         self._cancel_pending_after()
+        # 取消待执行的背景重建(避免销毁后仍触发)
+        if self._bg_pending is not None:
+            try:
+                self.root.after_cancel(self._bg_pending)
+            except Exception:
+                pass
+            self._bg_pending = None
         self._task_seq += 1          # 作废所有在途回调
         self._config["save_dir"] = self.save_dir.get()
         save_config(self._config)

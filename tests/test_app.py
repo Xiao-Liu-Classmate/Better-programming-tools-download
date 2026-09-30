@@ -482,6 +482,183 @@ class TestDeployerIsInstalled(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class TestUIThemeRendering(unittest.TestCase):
+    """UI 主题渲染层(不依赖 GUI 窗口, 可在 CI 无头环境跑)"""
+
+    @classmethod
+    def setUpClass(cls):
+        import ui_theme
+        cls.U = ui_theme
+
+    def setUp(self):
+        if not self.U.HAS_PIL:
+            self.skipTest("Pillow 不可用")
+
+    def test_palette_has_hex_variants(self):
+        """Tk 不接受 RGB 元组, 调色板必须提供 *_HEX"""
+        p = self.U.Palette
+        for name in ("BG_MID_HEX", "BG_BOT_HEX", "ACCENT_A_HEX",
+                     "ACCENT_C_HEX", "OK_HEX"):
+            v = getattr(p, name, None)
+            self.assertIsInstance(v, str, f"{name} 缺失")
+            self.assertTrue(v.startswith("#"), f"{name} 需为 #rrggbb")
+            int(v[1:], 16)      # 必须是合法十六进制
+
+    def test_hexof(self):
+        self.assertEqual(self.U.hexof((255, 0, 128)), "#FF0080")
+
+    def test_background_size(self):
+        img = self.U.make_background(320, 200)
+        self.assertEqual(img.size, (320, 200))
+
+    def test_background_handles_tiny(self):
+        for w, h in ((1, 1), (2, 3), (10, 10)):
+            self.assertEqual(self.U.make_background(w, h).size, (w, h))
+
+    def test_glass_panel_transparent_center(self):
+        """玻璃必须是半透明的, 否则失去通透感"""
+        img, pad = self.U.make_glass_panel(80, 50)
+        r, g, b, a = img.getpixel((40, 25))
+        self.assertGreater(a, 0, "玻璃中心应非全透明")
+        self.assertLess(a, 255, "玻璃中心不应完全不透明")
+        self.assertGreater(r, 200, "玻璃应为白色调")
+
+    def test_glass_panel_shadow_outside_only(self):
+        """投影只在外侧, 不能污染玻璃主体(否则面板发灰)"""
+        img, pad = self.U.make_glass_panel(80, 50)
+        center_a = img.getpixel((40, 25))[3]
+        below_a = img.getpixel((40, pad + 50 + 4))[3]
+        self.assertGreater(center_a, 0)
+        self.assertGreater(below_a, 0, "面板下方应有投影")
+
+    def test_glass_panel_no_shadow(self):
+        img, pad = self.U.make_glass_panel(80, 50, shadow=False)
+        self.assertEqual(pad, 0)
+        self.assertGreater(img.getpixel((40, 25))[3], 0)
+
+    def test_glass_panel_radius_clamped(self):
+        """半径不能超过边长一半, 否则 PIL 报错"""
+        img, _ = self.U.make_glass_panel(20, 20, radius=999)
+        self.assertIsNotNone(img)
+
+    def test_button_states_differ(self):
+        normal = self.U.make_gradient_button(90, 30, state="normal")
+        hover = self.U.make_gradient_button(90, 30, state="hover")
+        active = self.U.make_gradient_button(90, 30, state="active")
+        self.assertEqual(normal.size, hover.size)
+        self.assertNotEqual(normal.tobytes(), hover.tobytes())
+        self.assertNotEqual(hover.tobytes(), active.tobytes())
+
+    def test_accent_button_differs(self):
+        plain = self.U.make_gradient_button(90, 30, accent=False)
+        accent = self.U.make_gradient_button(90, 30, accent=True)
+        self.assertNotEqual(plain.tobytes(), accent.tobytes())
+
+    def test_button_disabled_is_gray(self):
+        dis = self.U.make_gradient_button(60, 24, state="disabled")
+        r, g, b, _ = dis.getpixel((30, 12))
+        # 灰色: 三通道接近
+        self.assertLess(max(r, g, b) - min(r, g, b), 20)
+
+    def test_progress_fill_gradient(self):
+        img = self.U.make_progress_fill(100, 8)
+        self.assertEqual(img.size, (100, 8))
+        left = img.getpixel((2, 4))
+        right = img.getpixel((97, 4))
+        self.assertNotEqual(left, right, "进度条应为渐变")
+
+    def test_draw_check_and_chevron(self):
+        """图标须用矢量绘制 —— 雅黑缺 ✓ / ▾ 字形, 会渲染成方块"""
+        from PIL import Image, ImageDraw
+        img = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        self.U.draw_check(d, 20, 20, 12, (255, 255, 255, 255))
+        self.U.draw_chevron(d, 20, 20, 12, (255, 255, 255, 255))
+        self.assertGreater(
+            sum(1 for p in img.getdata() if p[3] > 0), 0,
+            "矢量图标未绘制出任何像素")
+
+    def test_fonts_resolved(self):
+        f = self.U.load_fonts()
+        for k in ("ui", "ui_bold", "mono", "title"):
+            self.assertIsInstance(f[k], str)
+            self.assertTrue(f[k])
+
+
+class TestUIWidgetInterfaces(unittest.TestCase):
+    """自绘控件必须兼容 ttk 接口(否则 app.py 现有逻辑会崩)"""
+
+    def test_source_exposes_compat_api(self):
+        """静态检查: 关键控件提供 ttk 兼容方法"""
+        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
+        for token in ("def configure", "def cget", "def invoke",
+                      "def set_state", "def set_text",
+                      "def start", "def stop", "config = configure"):
+            self.assertIn(token, src, f"缺少兼容接口: {token}")
+
+    def test_button_state_is_property(self):
+        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
+        self.assertIn("state = property(get_state, set_state)", src)
+        self.assertIn("text = property(get_text, set_text)", src)
+
+    def test_no_tkinter_internal_attr_collision(self):
+        """回归: 曾用 self._w 存宽度, 与 tkinter 内部 widget 路径冲突,
+        导致 photo_for 收到字符串尺寸而崩溃"""
+        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
+        for bad in ("self._w =", "self._h =", "self._w /", "self._h /"):
+            self.assertNotIn(bad, src, f"不应再使用内部属性名: {bad}")
+
+    def test_no_recursive_configure(self):
+        """回归: _apply_colors 调 self.configure 会无限递归"""
+        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
+        body = src.split("def _apply_colors")[1].split("\n    def ")[0]
+        # 只看代码行, 排除注释里的说明文字
+        code = [ln.split("#")[0] for ln in body.splitlines()]
+        for ln in code:
+            self.assertNotIn("self.configure(", ln,
+                             "_apply_colors 内必须用 super().configure")
+
+    def test_button_supports_getitem_and_cget(self):
+        """回归: btn[\"state\"] 若回落到 Canvas 的 -state(恒 normal),
+        ESC 绑定的 `cancel_btn["state"] == "normal"` 会永远成立,
+        导致空闲时按 ESC 也触发取消。"""
+        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
+        cls = src.split("class GlassButton")[1].split("\nclass ")[0]
+        self.assertIn("def __getitem__", cls,
+                      "GlassButton 必须支持 btn[\"state\"] 语法")
+        self.assertIn("def cget", cls)
+        self.assertIn('if k == "state"', cls,
+                      "cget 必须优先返回自有 state 而非 Canvas 的 -state")
+
+    def test_panel_uses_reduced_photo_size(self):
+        """回归: 玻璃图自带投影留白, 若按面板原尺寸取图并把画布内缩,
+        右侧/底部的描边与圆角会被裁掉(方角断边)。"""
+        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
+        cls = src.split("class GlassPanel")[1].split("\nclass ")[0]
+        self.assertIn("iw, ih = w - PAD * 2", cls,
+                      "取图尺寸必须减去两侧投影留白")
+        # 画布本身应铺满父容器
+        self.assertIn("self.canvas.place(x=0, y=0, relwidth=1, relheight=1)",
+                      cls)
+
+    def test_background_is_not_covered(self):
+        """回归: content 层若用不透明底色铺满 root, 渐变背景会被遮死,
+        液态玻璃特效等于没做。必须启用色键透明。"""
+        src = (ROOT / "app.py").read_text(encoding="utf-8")
+        self.assertIn("-transparentcolor", src,
+                      "需用色键透明让背景透上来")
+
+    def test_no_ttk_style_with_rgba_tuple(self):
+        """回归: Palette.TROUGH 等是 4 元组, 传给 ttk.Style.configure
+        会抛 bad color 导致程序无法启动。"""
+        src = (ROOT / "app.py").read_text(encoding="utf-8")
+        body = src.split("def _apply_ttk_styles")[1].split("\n    def ")[0]
+        for name in ("p.TROUGH", "p.GLASS_FILL", "p.TREE_SEL_BG",
+                     "p.ACCENT_A,", "p.ACCENT_B)"):
+            self.assertNotIn(name, body,
+                             f"ttk style 不应接收 RGB 元组: {name}")
+
+
 class TestToolDataLayer(unittest.TestCase):
     """tooldata 数据层: 须脱离 tkinter 独立可用(供 CI Linux 容器)"""
 

@@ -133,12 +133,20 @@ SHA256: 3B5934E0E1E55A3411F33F9B02D17C642122DD47895911958CD5B3099B407375
 python app.py
 ```
 
-依赖：仅 Python 标准库（tkinter、urllib、subprocess 等），无需 pip 安装任何第三方包。
+核心功能仅依赖 Python 标准库（tkinter、urllib、subprocess 等），无需 pip 安装任何第三方包。
+
+**可选依赖**：安装 [Pillow](https://pypi.org/project/Pillow/) 可获得液态玻璃界面特效（毛玻璃卡片、渐变按钮与进度条、折射光晕背景）：
+
+```bash
+pip install pillow
+```
+
+未安装时程序自动降级为纯色界面，功能完全不受影响。
 
 ## 开发与测试
 
 ```bash
-# 运行单元测试（129 项，不触网、不创建 GUI 窗口，约 0.03 秒）
+# 运行单元测试（151 项，不触网、不创建 GUI 窗口，约 0.03 秒）
 python -m unittest discover -s tests -v
 
 # 或使用 pytest
@@ -159,7 +167,7 @@ CI 说明：
 
 | 平台 | 配置 | 内容 |
 | --- | --- | --- |
-| GitHub | `.github/workflows/ci.yml` | windows-latest：语法检查 + 129 项单元测试 + 工具库校验 + 卫生自检 |
+| GitHub | `.github/workflows/ci.yml` | windows-latest：语法检查 + 151 项单元测试 + 工具库校验 + 卫生自检 |
 | Gitee | `.workflow/tools-data-check.yml` | Linux 容器：语法检查 + 工具库校验 |
 
 Gitee 免费版流水线仅提供 Linux 容器，而本项目是 Windows 专用工具（需要 tkinter），因此 Gitee 侧只跑不依赖图形环境的数据层校验；完整单元测试以 GitHub 侧为准。
@@ -209,7 +217,7 @@ Better-programming-tools-download/
 ├── run.bat                 # 启动脚本
 ├── CHANGELOG.md            # 更新日志
 ├── tests/
-│   ├── test_app.py         # 单元测试（129 项）
+│   ├── test_app.py         # 单元测试（151 项）
 │   ├── selfcheck.py        # 代码卫生自检
 │   └── __init__.py
 ├── .github/
