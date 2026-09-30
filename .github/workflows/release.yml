@@ -104,10 +104,13 @@ jobs:
           '@
           $notes = $notes -replace '__SIZE__', $sizeMB
           # 幂等追加 SHA256(重跑时先去掉旧行)
+          # 幂等: 重跑时先清掉旧围栏与旧 SHA256 行, 否则会残留孤立的 ```
+          # (只删 SHA256 行会留下空的代码块, 渲染成多个空围栏)
+          $fence = ([string][char]96) * 3
           $notes = ($notes -split "`n" |
-                    Where-Object { $_ -notmatch '^SHA256:' }) -join "`n"
-          # 代码围栏用 [char]96 构造, 避免 YAML/PowerShell 双重转义踩坑
-          $fence = [char]96 * 3
+                    Where-Object { $_ -notmatch '^SHA256:' -and
+                                   $_.Trim() -ne $fence -and
+                                   $_.Trim() -ne "${fence}text" }) -join "`n"
           $notes = $notes.TrimEnd() + "`n`n${fence}text`nSHA256: $sha`n${fence}`n"
           $notes | Out-File -FilePath $notesFile -Encoding utf8
 
