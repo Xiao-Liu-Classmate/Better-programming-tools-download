@@ -59,34 +59,34 @@ jobs:
         run: |
           python -m pip install --upgrade "pyinstaller==6.11.1" "pillow>=10,<12"
 
-      - name: 打包 exe
-        # 用 spec 文件而非命令行参数: spec 里显式声明了
-        # PIL.ImageTk 等 hiddenimports(它们是函数内延迟导入,
-        # 静态分析抓不到), 保证玻璃渲染模块被完整打包
-        run: |
-          # spec 用英文文件名: 避免中文路径在 CI 环境下
-          # 传给 PyInstaller 时出问题
-          python -X utf8 -m PyInstaller build.spec
-
-      - name: 校验产物
-        id: artifact
+      - name: 打包并校验 exe
+        # 用 spec 而非命令行参数: spec 里声明了 PIL.ImageTk 等
+        # 延迟导入模块的 hiddenimports(静态分析抓不到),
+        # 缺了会导致玻璃特效静默失效
         shell: pwsh
         run: |
+          python -X utf8 -m PyInstaller build.spec
+          if ($LASTEXITCODE -ne 0) { Write-Error "打包失败"; exit 1 }
+          # PyInstaller 报告 success 后产物可能仍在写盘,
+          # 这里轮询等待, 避免后续步骤抢跑
           $exe = "dist\Programming-Tools-Downloader.exe"
+          for ($i = 0; $i -lt 30; $i++) {
+            if (Test-Path -LiteralPath $exe) { break }
+            Start-Sleep -Seconds 2
+          }
           if (-not (Test-Path -LiteralPath $exe)) {
-            Write-Error "未生成 $exe"
+            Write-Error "未生成 $exe, dist 实际内容:"
             Get-ChildItem dist -ErrorAction SilentlyContinue |
-              ForEach-Object { Write-Host "  dist: $($_.Name)" }
+              ForEach-Object { Write-Host "  $($_.Name)" }
             exit 1
           }
           $size = (Get-Item -LiteralPath $exe).Length
           $sha  = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
           Write-Host "产物: $exe ($size 字节)"
           Write-Host "SHA256: $sha"
-          # 缺 Pillow 时产物约 11MB, 完整约 33MB
+          # 缺 Pillow 时约 11MB, 完整约 33MB
           if ($size -lt 20MB) {
-            Write-Error ("产物仅 {0:N2} MB, 疑似未打包 Pillow —— " +
-                         "玻璃特效会失效" -f ($size / 1MB))
+            Write-Error ("产物仅 {0:N2} MB, 疑似未打包 Pillow" -f ($size / 1MB))
             exit 1
           }
           "size=$size" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
