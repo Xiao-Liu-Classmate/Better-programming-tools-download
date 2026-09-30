@@ -60,6 +60,9 @@ jobs:
           python -m pip install --upgrade "pyinstaller==6.11.1" "pillow>=10,<12"
 
       - name: 打包并校验 exe
+        # id 必须保留: 后续 Release 步骤靠它读取 size/sha,
+        # 缺失会导致 notes 里 SHA256 为空
+        id: artifact
         # 用 spec 而非命令行参数: spec 里声明了 PIL.ImageTk 等
         # 延迟导入模块的 hiddenimports(静态分析抓不到),
         # 缺了会导致玻璃特效静默失效
