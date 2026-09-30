@@ -12,7 +12,7 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
-![Deps](https://img.shields.io/badge/dependencies-stdlib%20only-success)
+![Deps](https://img.shields.io/badge/dependencies-stdlib%20%2B%20optional%20Pillow-informational)
 
 ## 快速开始
 
@@ -20,22 +20,25 @@
 
 ## 下载
 
-**v4.0.0 发行版**
+**v4.1.0 发行版**（液态玻璃界面）
 
 | 平台 | 附件 | 链接 |
 | --- | --- | --- |
-| GitHub | `Programming-Tools-Downloader-v4.0.0.exe` | [下载](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases/tag/v4.0.0) |
-| Gitee | `编程工具下载器.exe` | [下载](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download/releases/tag/v4.0.0) |
+| GitHub | `Programming-Tools-Downloader.exe` | [下载](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases/tag/v4.1.0) |
+| Gitee | `Programming-Tools-Downloader.exe` | [下载](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download/releases/tag/v4.1.0) |
 
-两侧附件均为 11.06 MB，内容完全一致（SHA256 相同）。双击即可运行，无需安装 Python 环境。
+双击即可运行，无需安装 Python 环境。本版界面全面重做为液态玻璃风格，
+程序体积从 11.06 MB 增至 19–33 MB（差异来自两侧构建环境的 Pillow 版本）。
 
-> GitHub 侧附件采用 ASCII 文件名，以避免部分 Windows 环境下的中文文件名乱码与杀毒软件误报；Gitee 侧保留中文名。
+**校验值**
 
-**校验值**（两平台通用）
+| 平台 | 大小 | SHA256 |
+| --- | --- | --- |
+| GitHub | 19.45 MB | `7D8AB014BD0004B233FEB6494317CF0D61110E4E586FBF0073A1AAF51339A23A` |
+| Gitee | 33.19 MB | `0655D2C03DF6A992E04B5BB78F6E33E2CEDEE3403B3661D39C0A0DB4B953460F` |
 
-```
-SHA256: 3B5934E0E1E55A3411F33F9B02D17C642122DD47895911958CD5B3099B407375
-```
+> 两侧附件均为 ASCII 文件名，以避免部分 Windows 环境下的中文文件名乱码与杀毒软件误报。
+> 二进制由各自平台独立构建，功能完全一致，故哈希不同。
 
 > 仓库不存储二进制文件（`.gitignore` 已排除 `dist/` 与 `*.exe`），可执行文件通过 Releases 或本地构建获取。
 

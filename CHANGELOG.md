@@ -19,9 +19,12 @@
 液态玻璃界面。核心业务逻辑（下载引擎、部署器、任务状态机、事件绑定、
 快捷键）零改动。
 
-发布标签 `v4.1.0`。预编译产物见双平台 Releases
-（GitHub 附件名 `Programming-Tools-Downloader-v4.1.0.exe`，Gitee 为
-`编程工具下载器.exe`，均约 33 MB —— 含 Pillow）。
+发布标签 `v4.1.0`。预编译产物见双平台 Releases，附件名统一为
+`Programming-Tools-Downloader.exe`。两侧体积不同（GitHub 19.45 MB、
+Gitee 33.19 MB），因各自独立构建且 Pillow 版本不同 —— 功能一致。
+
+SHA256：GitHub `7D8AB014BD0004B233FEB6494317CF0D61110E4E586FBF0073A1AAF51339A23A`
+Gitee `0655D2C03DF6A992E04B5BB78F6E33E2CEDEE3403B3661D39C0A0DB4B953460F`
 
 ### 新增
 
@@ -55,13 +58,6 @@
 - 依赖变化：核心功能仍**仅用标准库**；Pillow 为可选增强（`pip install pillow`）
 - 打包体积从 11.06 MB 增至约 33 MB（含 Pillow）
 - 窗口默认尺寸 1180×820
-
-### 计划中
-
-- 断点续传：当前 `.partial_download` 每次启动即删除，无法续传
-- 镜像源回退：官方源不可达时尝试备用镜像（需权衡供应链风险）
-- 多线程分片下载
-- 工具版本自动巡检：定期探测官方直链是否失效或跳转到新版本
 
 ## [4.0.0] - 2026-09-26
 
