@@ -38,8 +38,9 @@ jobs:
           if (-not $tag) { $tag = "${{ github.ref_name }}" }
           # 统一为 vX.Y.Z 形式
           if ($tag -notmatch '^v') { $tag = "v$tag" }
-          $body = @{ tag = $tag } | ConvertTo-Json -Compress
-          $body | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          # GITHUB_OUTPUT 只接受 key=value 逐行格式, 不接受 JSON
+          # (写成 ConvertTo-Json 会报 Invalid format)
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "版本号: $tag"
 
       - name: 语法检查
