@@ -85,7 +85,9 @@ jobs:
           Write-Host "产物: $exe ($size 字节)"
           Write-Host "SHA256: $sha"
           # 缺 Pillow 时约 11MB, 完整约 33MB
-          if ($size -lt 20MB) {
+          # 缺 Pillow 时约 11MB; 含 Pillow 时 CI(win) 约 19-33MB
+          # (体积随 Pillow 版本略有差异, 权威判据是下一步的模块检查)
+          if ($size -lt 15MB) {
             Write-Error ("产物仅 {0:N2} MB, 疑似未打包 Pillow" -f ($size / 1MB))
             exit 1
           }
