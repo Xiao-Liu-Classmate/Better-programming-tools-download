@@ -13,10 +13,10 @@ permissions:
 
 jobs:
   test:
-    # 本项目为 Windows 专用工具(Tkinter GUI + 静默安装),
-    # 选择 windows runner 以获得原生 tkinter 与一致的环境
+    # 本项目为 Windows 专用工具(PySide6 GUI + 静默安装),
+    # 选择 windows runner 以获得原生 Qt 平台插件与一致环境
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v5
@@ -25,21 +25,33 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          # 注意: 本项目仅依赖标准库, 无 requirements.txt,
-          # 因此不启用 cache: pip(缺依赖文件会导致该步骤报错)
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 安装依赖
+        run: python -X utf8 -m pip install -r requirements.txt
 
       - name: 语法检查
         run: |
-          python -X utf8 -m py_compile app.py tools.py tooldata.py tests/test_app.py tests/selfcheck.py
+          python -X utf8 -m py_compile app.py ui_qt.py ui_bind.py check_qt_runtime.py tools.py tooldata.py tests/test_app.py tests/selfcheck.py tests/smoke_ui.py
           echo "语法检查通过"
 
       - name: 运行单元测试
-        run: |
-          python -X utf8 -m unittest discover -s tests -v
+        # 无头环境必须指定 offscreen 平台插件, 否则 Qt 无法初始化
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -X utf8 -m unittest discover -s tests -v
 
       - name: 校验内置工具数据完整性
-        run: |
-          python -X utf8 tooldata.py
+        run: python -X utf8 tooldata.py
+
+      - name: 界面集成冒烟测试
+        # 单元测试不建窗口, 覆盖不到控件 API 误用。迁移期曾因 ttk
+        # 方法残留(pack_forget / configure(text=) / progress.start)
+        # 导致下载流程运行时崩溃, 而 CI 仍全绿 —— 故单独跑此脚本。
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -X utf8 tests/smoke_ui.py
 
   lint:
     runs-on: windows-latest
@@ -52,5 +64,4 @@ jobs:
           python-version: "3.11"
 
       - name: 代码卫生检查(仅标准库, 无需联网安装)
-        run: |
-          python -X utf8 -m tests.selfcheck
+        run: python -X utf8 -m tests.selfcheck

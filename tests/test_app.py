@@ -11,6 +11,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 import unittest
@@ -483,180 +484,422 @@ class TestDeployerIsInstalled(unittest.TestCase):
 
 
 class TestUIThemeRendering(unittest.TestCase):
-    """UI 主题渲染层(不依赖 GUI 窗口, 可在 CI 无头环境跑)"""
+    """UI 主题层(不依赖显示设备, 可在 CI 无头环境跑)"""
 
     @classmethod
     def setUpClass(cls):
-        import ui_theme
-        cls.U = ui_theme
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        import ui_qt
+        cls.U = ui_qt
 
-    def setUp(self):
-        if not self.U.HAS_PIL:
-            self.skipTest("Pillow 不可用")
+    def test_palette_values_are_qss_safe(self):
+        """所有颜色必须是 QSS 可接受的字符串。
 
-    def test_palette_has_hex_variants(self):
-        """Tk 不接受 RGB 元组, 调色板必须提供 *_HEX"""
-        p = self.U.Palette
-        for name in ("BG_MID_HEX", "BG_BOT_HEX", "ACCENT_A_HEX",
-                     "ACCENT_C_HEX", "OK_HEX"):
-            v = getattr(p, name, None)
-            self.assertIsInstance(v, str, f"{name} 缺失")
-            self.assertTrue(v.startswith("#"), f"{name} 需为 #rrggbb")
-            int(v[1:], 16)      # 必须是合法十六进制
+        Qt 的 QSS 只接受 #rrggbb / rgba(...) /具名色, 传 RGB 元组
+        会导致样式表解析失败(界面整体失去样式)。
+        """
+        p = self.U.PAL
+        names = [n for n in dir(p)
+                 if n.isupper() and not n.startswith("_")]
+        self.assertTrue(names, "调色板为空")
+        for name in names:
+            v = getattr(p, name)
+            with self.subTest(color=name):
+                self.assertIsInstance(v, str, f"{name} 必须是字符串")
+                ok = v.startswith("#") or v.startswith("rgba(") \
+                    or v.startswith("qlineargradient") or v == "transparent"
+                self.assertTrue(ok, f"{name} 不是合法 QSS 颜色: {v}")
+                if v.startswith("#"):
+                    self.assertRegex(v, r"^#[0-9A-Fa-f]{6}$")
 
-    def test_hexof(self):
-        self.assertEqual(self.U.hexof((255, 0, 128)), "#FF0080")
-
-    def test_background_size(self):
+    def test_background_matches_requested_size(self):
         img = self.U.make_background(320, 200)
-        self.assertEqual(img.size, (320, 200))
+        self.assertIsNotNone(img)
+        self.assertEqual((img.width(), img.height()), (320, 200))
 
     def test_background_handles_tiny(self):
         for w, h in ((1, 1), (2, 3), (10, 10)):
-            self.assertEqual(self.U.make_background(w, h).size, (w, h))
+            img = self.U.make_background(w, h)
+            self.assertIsNotNone(img, f"{w}x{h} 生成失败")
+            self.assertEqual((img.width(), img.height()), (w, h))
 
-    def test_glass_panel_transparent_center(self):
-        """玻璃必须是半透明的, 否则失去通透感"""
-        img, pad = self.U.make_glass_panel(80, 50)
-        r, g, b, a = img.getpixel((40, 25))
-        self.assertGreater(a, 0, "玻璃中心应非全透明")
-        self.assertLess(a, 255, "玻璃中心不应完全不透明")
-        self.assertGreater(r, 200, "玻璃应为白色调")
+    def test_background_handles_invalid(self):
+        self.assertIsNone(self.U.make_background(0, 100))
+        self.assertIsNone(self.U.make_background(100, 0))
+        self.assertIsNone(self.U.make_background(-5, -5))
 
-    def test_glass_panel_shadow_outside_only(self):
-        """投影只在外侧, 不能污染玻璃主体(否则面板发灰)"""
-        img, pad = self.U.make_glass_panel(80, 50)
-        center_a = img.getpixel((40, 25))[3]
-        below_a = img.getpixel((40, pad + 50 + 4))[3]
-        self.assertGreater(center_a, 0)
-        self.assertGreater(below_a, 0, "面板下方应有投影")
+    def test_background_is_opaque(self):
+        """背景必须不透明, 否则窗口透明处会露出桌面/黑屏。"""
+        img = self.U.make_background(64, 64)
+        self.assertFalse(img.hasAlphaChannel() and not img.isGrayscale())
 
-    def test_glass_panel_no_shadow(self):
-        img, pad = self.U.make_glass_panel(80, 50, shadow=False)
-        self.assertEqual(pad, 0)
-        self.assertGreater(img.getpixel((40, 25))[3], 0)
+    def test_build_qss_returns_text(self):
+        fonts = self.U.load_fonts()
+        qss = self.U.build_qss(fonts)
+        self.assertIsInstance(qss, str)
+        self.assertGreater(len(qss), 200, "样式表过短, 可能漏写")
+        # 关键控件必须有样式, 否则深色底上文字不可读
+        for token in ("QPushButton", "QLineEdit", "QTreeWidget",
+                      "QProgressBar", "QComboBox", "QMenu"):
+            self.assertIn(token, qss, f"样式表缺少 {token}")
 
-    def test_glass_panel_radius_clamped(self):
-        """半径不能超过边长一半, 否则 PIL 报错"""
-        img, _ = self.U.make_glass_panel(20, 20, radius=999)
-        self.assertIsNotNone(img)
+    def test_qss_has_balanced_braces(self):
+        """QSS 以花括号分块; 若数量不平衡, 引擎会静默丢弃后续样式。"""
+        fonts = self.U.load_fonts()
+        qss = self.U.build_qss(fonts)
+        self.assertEqual(qss.count("{"), qss.count("}"),
+                         "花括号不配对, 样式表会被截断")
 
-    def test_button_states_differ(self):
-        normal = self.U.make_gradient_button(90, 30, state="normal")
-        hover = self.U.make_gradient_button(90, 30, state="hover")
-        active = self.U.make_gradient_button(90, 30, state="active")
-        self.assertEqual(normal.size, hover.size)
-        self.assertNotEqual(normal.tobytes(), hover.tobytes())
-        self.assertNotEqual(hover.tobytes(), active.tobytes())
+    def test_qss_no_unexpanded_placeholder(self):
+        """未替换的 f-string 占位会让整段样式失效。"""
+        fonts = self.U.load_fonts()
+        qss = self.U.build_qss(fonts)
+        # QSS 里合法出现 '{' 仅用于分块; 形如 {xxx} 的应视为未展开
+        self.assertIsNone(re.search(r"\{[A-Za-z_]+\}", qss),
+                          "样式表里存在未展开的占位符")
 
-    def test_accent_button_differs(self):
-        plain = self.U.make_gradient_button(90, 30, accent=False)
-        accent = self.U.make_gradient_button(90, 30, accent=True)
-        self.assertNotEqual(plain.tobytes(), accent.tobytes())
-
-    def test_button_disabled_is_gray(self):
-        dis = self.U.make_gradient_button(60, 24, state="disabled")
-        r, g, b, _ = dis.getpixel((30, 12))
-        # 灰色: 三通道接近
-        self.assertLess(max(r, g, b) - min(r, g, b), 20)
-
-    def test_progress_fill_gradient(self):
-        img = self.U.make_progress_fill(100, 8)
-        self.assertEqual(img.size, (100, 8))
-        left = img.getpixel((2, 4))
-        right = img.getpixel((97, 4))
-        self.assertNotEqual(left, right, "进度条应为渐变")
-
-    def test_draw_check_and_chevron(self):
-        """图标须用矢量绘制 —— 雅黑缺 ✓ / ▾ 字形, 会渲染成方块"""
-        from PIL import Image, ImageDraw
-        img = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        self.U.draw_check(d, 20, 20, 12, (255, 255, 255, 255))
-        self.U.draw_chevron(d, 20, 20, 12, (255, 255, 255, 255))
-        self.assertGreater(
-            sum(1 for p in img.getdata() if p[3] > 0), 0,
-            "矢量图标未绘制出任何像素")
-
-    def test_fonts_resolved(self):
-        f = self.U.load_fonts()
-        for k in ("ui", "ui_bold", "mono", "title"):
-            self.assertIsInstance(f[k], str)
-            self.assertTrue(f[k])
+    def test_load_fonts_returns_all_keys(self):
+        fonts = self.U.load_fonts()
+        for k in ("ui", "mono", "size"):
+            self.assertIn(k, fonts)
+            self.assertTrue(fonts[k].family())
 
 
-class TestUIWidgetInterfaces(unittest.TestCase):
-    """自绘控件必须兼容 ttk 接口(否则 app.py 现有逻辑会崩)"""
+class TestQtBindLayer(unittest.TestCase):
+    """ui_bind 必须提供 app.py 依赖的 ttk 兼容接口。
 
-    def test_source_exposes_compat_api(self):
-        """静态检查: 关键控件提供 ttk 兼容方法"""
-        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
-        for token in ("def configure", "def cget", "def invoke",
-                      "def set_state", "def set_text",
-                      "def start", "def stop", "config = configure"):
-            self.assertIn(token, src, f"缺少兼容接口: {token}")
+    这些接口是业务层与界面层的唯一契约, 缺一个就会让下载/部署
+    流程在运行时AttributeError。
+    """
 
-    def test_button_state_is_property(self):
-        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
-        self.assertIn("state = property(get_state, set_state)", src)
-        self.assertIn("text = property(get_text, set_text)", src)
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        import ui_bind
+        cls.B = ui_bind
 
-    def test_no_tkinter_internal_attr_collision(self):
-        """回归: 曾用 self._w 存宽度, 与 tkinter 内部 widget 路径冲突,
-        导致 photo_for 收到字符串尺寸而崩溃"""
-        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
-        for bad in ("self._w =", "self._h =", "self._w /", "self._h /"):
-            self.assertNotIn(bad, src, f"不应再使用内部属性名: {bad}")
+    # ── 接口存在性 ──
 
-    def test_no_recursive_configure(self):
-        """回归: _apply_colors 调 self.configure 会无限递归"""
-        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
-        body = src.split("def _apply_colors")[1].split("\n    def ")[0]
-        # 只看代码行, 排除注释里的说明文字
-        code = [ln.split("#")[0] for ln in body.splitlines()]
-        for ln in code:
-            self.assertNotIn("self.configure(", ln,
-                             "_apply_colors 内必须用 super().configure")
+    def test_var_interface(self):
+        for m in ("get", "set", "trace_add"):
+            self.assertTrue(callable(getattr(self.B.Var, m, None)),
+                            f"Var 缺少 {m}")
 
-    def test_button_supports_getitem_and_cget(self):
-        """回归: btn[\"state\"] 若回落到 Canvas 的 -state(恒 normal),
-        ESC 绑定的 `cancel_btn["state"] == "normal"` 会永远成立,
-        导致空闲时按 ESC 也触发取消。"""
-        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
-        cls = src.split("class GlassButton")[1].split("\nclass ")[0]
-        self.assertIn("def __getitem__", cls,
-                      "GlassButton 必须支持 btn[\"state\"] 语法")
-        self.assertIn("def cget", cls)
-        self.assertIn('if k == "state"', cls,
-                      "cget 必须优先返回自有 state 而非 Canvas 的 -state")
+    def test_tree_interface(self):
+        for m in ("delete", "insert", "item", "selection",
+                  "selection_set", "get_children", "heading", "column",
+                  "tag_configure", "see", "bind"):
+            self.assertTrue(callable(getattr(self.B.TreeShim, m, None)),
+                            f"TreeShim 缺少 {m}")
 
-    def test_panel_uses_reduced_photo_size(self):
-        """回归: 玻璃图自带投影留白, 若按面板原尺寸取图并把画布内缩,
-        右侧/底部的描边与圆角会被裁掉(方角断边)。"""
-        src = (ROOT / "ui_widgets.py").read_text(encoding="utf-8")
-        cls = src.split("class GlassPanel")[1].split("\nclass ")[0]
-        self.assertIn("iw, ih = w - PAD * 2", cls,
-                      "取图尺寸必须减去两侧投影留白")
-        # 画布本身应铺满父容器
-        self.assertIn("self.canvas.place(x=0, y=0, relwidth=1, relheight=1)",
-                      cls)
+    def test_text_interface(self):
+        for m in ("insert", "delete", "get", "see", "configure"):
+            self.assertTrue(callable(getattr(self.B.TextShim, m, None)),
+                            f"TextShim 缺少 {m}")
 
-    def test_background_is_not_covered(self):
-        """回归: content 层若用不透明底色铺满 root, 渐变背景会被遮死,
-        液态玻璃特效等于没做。必须启用色键透明。"""
-        src = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn("-transparentcolor", src,
-                      "需用色键透明让背景透上来")
+    def test_button_interface(self):
+        for m in ("state", "set_state", "configure"):
+            self.assertTrue(callable(getattr(self.B.Button, m, None)),
+                            f"Button 缺少 {m}")
 
-    def test_no_ttk_style_with_rgba_tuple(self):
-        """回归: Palette.TROUGH 等是 4 元组, 传给 ttk.Style.configure
-        会抛 bad color 导致程序无法启动。"""
-        src = (ROOT / "app.py").read_text(encoding="utf-8")
+    def test_progress_interface(self):
+        self.assertTrue(callable(getattr(self.B.ProgressShim, "configure",
+                                         None)))
+
+    def test_dialog_entrypoints(self):
+        for name in ("show_info", "show_error", "show_warning",
+                     "ask_yesno", "ask_directory", "ask_saveas",
+                     "ask_openfilename"):
+            self.assertTrue(callable(getattr(self.B, name, None)),
+                            f"缺少对话框入口 {name}")
+        # 业务层使用的 ttk 风格名也必须存在
+        self.assertTrue(callable(self.B.messagebox.showinfo))
+        self.assertTrue(callable(self.B.messagebox.askyesno))
+        self.assertTrue(callable(self.B.filedialog.asksaveasfilename))
+        self.assertTrue(callable(self.B.filedialog.askdirectory))
+        self.assertTrue(callable(self.B.filedialog.askopenfilename))
+
+    def test_root_after_signature(self):
+        """业务层以 root.after(ms, fn) 调度, 签名不可变。
+
+        还须支持 tkinter 的 ``after(ms, fn, *args)`` 透传形式:
+        业务代码 ``root.after(2000, self._restore_status, old)`` 依赖
+        把额外参数传给回调。漏掉 *args 会让「复制 URL」直接崩。
+        """
+        import inspect
+        sig = inspect.signature(self.B.RootShim.after)
+        params = list(sig.parameters)
+        self.assertEqual(params[:3], ["self", "ms", "fn"])
+        self.assertIn("args", params, "须支持 *args 透传")
+        self.assertEqual(
+            sig.parameters["args"].kind,
+            inspect.Parameter.VAR_POSITIONAL)
+
+    def test_root_after_runs_with_extra_args(self):
+        """after(ms, fn, arg) 必须在主线程把 arg 传给 fn。"""
+        self._app()
+        from PySide6 import QtCore, QtWidgets
+        win = QtWidgets.QMainWindow()
+        root = self.B.RootShim(win)
+        got = []
+        root.after(0, lambda v: got.append(v), "值")
+        for _ in range(80):
+            QtWidgets.QApplication.processEvents()
+            if got:
+                break
+        self.assertEqual(got, ["值"], "额外参数未透传或回调未执行")
+        win.close()
+
+    # ── 行为(离屏 Qt) ──
+
+    def _app(self):
+        from PySide6 import QtWidgets
+        return (QtWidgets.QApplication.instance()
+                or QtWidgets.QApplication([]))
+
+    def test_var_roundtrip_without_widget(self):
+        self._app()
+        v = self.B.Var(value="a")
+        self.assertEqual(v.get(), "a")
+        v.set("b")
+        self.assertEqual(v.get(), "b")
+        v.set(None)
+        self.assertEqual(v.get(), "", "None 应归一为空串")
+
+    def test_var_trace_fires_on_change_only(self):
+        self._app()
+        calls = []
+        v = self.B.Var(value="x")
+        v.trace_add("write", lambda: calls.append(1))
+        v.set("x")            # 同值不应触发
+        self.assertEqual(len(calls), 0, "同值不应触发回调")
+        v.set("y")
+        self.assertEqual(len(calls), 1)
+
+    def test_tree_insert_delete_and_selection(self):
+        self._app()
+        from PySide6 import QtWidgets
+        w = QtWidgets.QTreeWidget()
+        t = self.B.TreeShim(w, columns=("a", "b"))
+        t.insert("", "end", iid="1", values=("x", "y"))
+        t.insert("", "end", iid="2", values=("p", "q"))
+        self.assertEqual(sorted(t.get_children()), ["1", "2"])
+        self.assertEqual(t.item("1", "values"), ["x", "y"])
+        t.selection_set("1")
+        self.assertIn("1", t.selection())
+        t.selection_set("missing")          # 未知 iid 不应抛
+        t.delete(*t.get_children())
+        self.assertEqual(t.get_children(), [])
+
+    def test_tree_item_tags_roundtrip(self):
+        """下载高亮依赖 tags 读写。"""
+        self._app()
+        from PySide6 import QtWidgets
+        w = QtWidgets.QTreeWidget()
+        t = self.B.TreeShim(w, columns=("a",))
+        t.insert("", "end", iid="1", values=("x",), tags=("installed",))
+        self.assertIn("installed", t.item("1", "tags"))
+        t.item("1", tags=("downloading",))
+        self.assertEqual(t.item("1", "tags"), ("downloading",))
+
+    def test_tree_missing_iid_raises_like_ttk(self):
+        self._app()
+        from PySide6 import QtWidgets
+        t = self.B.TreeShim(QtWidgets.QTreeWidget(), columns=("a",))
+        with self.assertRaises(KeyError):
+            t.item("nope", "values")
+
+    def test_combo_values_and_current(self):
+        self._app()
+        from PySide6 import QtWidgets
+        c = self.B.ComboShim(QtWidgets.QComboBox())
+        c["values"] = ["a", "b", "c"]
+        self.assertEqual(c["values"], ["a", "b", "c"])
+        c.current(1)
+        self.assertEqual(c.current(), 1)
+        c.current(99)                 # 越界不应抛
+        self.assertTrue(c.winfo_exists())
+
+    def test_button_state_roundtrip(self):
+        """ESC 快捷键判定依赖 state() 返回 disabled 标记。"""
+        self._app()
+        from PySide6 import QtWidgets
+        b = self.B.Button(QtWidgets.QPushButton("x"))
+        b.set_state("disabled")
+        self.assertIn("disabled", b.state())
+        b.set_state("normal")
+        self.assertEqual(b.state(), [])
+        b.configure(state="disabled")
+        self.assertIn("disabled", b.state())
+
+    def test_progress_clamps_maximum(self):
+        """ttk 允许 maximum=0, Qt 会除零 -> 必须钳位。"""
+        self._app()
+        from PySide6 import QtWidgets
+        p = self.B.ProgressShim(QtWidgets.QProgressBar())
+        p.configure(maximum=0, value=0)
+        self.assertGreaterEqual(p.w.maximum(), 1)
+        p.configure(maximum=100, value=42)
+        self.assertEqual(p.w.maximum(), 100)
+        self.assertEqual(p.w.value(), 42)
+
+    def test_text_shim_readonly_semantics(self):
+        """日志区必须只读, 且能追加/读取/清空。"""
+        self._app()
+        from PySide6 import QtWidgets
+        tw = QtWidgets.QPlainTextEdit()
+        t = self.B.TextShim(tw)
+        t.insert("end", "line1\n")
+        t.insert("end", "line2\n")
+        self.assertIn("line1", t.get("1.0", "end"))
+        self.assertIn("line2", t.get("1.0", "end"))
+        t.delete("1.0", "end")
+        self.assertEqual(t.get("1.0", "end").strip(), "")
+
+
+class TestQtIntegration(unittest.TestCase):
+    """静态约束: 迁移后不应再有 tkinter 痕迹与自绘渲染残留"""
+
+    def _src(self, name):
+        return (ROOT / name).read_text(encoding="utf-8")
+
+    def test_app_has_no_tkinter_import(self):
+        """app.py 必须彻底脱离 tkinter。"""
+        import ast
+        tree = ast.parse(self._src("app.py"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    imported.add(a.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module.split(".")[0])
+        self.assertNotIn("tkinter", imported, f"仍依赖 tkinter: {imported}")
+        self.assertIn("PySide6", imported, "未引入 PySide6")
+
+    def test_no_tkinter_api_calls(self):
+        """app.py 不得直接调用 tkinter API。
+
+        这是本次迁移最容易漏的一类问题: ttk/Canvas 的方法名(
+        ``pack`` / ``pack_forget`` / ``identify_row`` / ``after``)在
+        Qt 控件上不存在, 一旦残留就会在运行时抛 AttributeError ——
+        且往往发生在下载主流程里, 单元测试又测不到。
+
+        ``winfo_exists`` 例外: 它是 ttk 的存在性查询, ui_bind 的
+        ComboShim 刻意保留了该方法名以兼容既有调用点。
+        """
+        src = self._src("app.py")
+        forbidden = (
+            "tk.", "ttk.", "TclError", "tk_popup", "after_idle",
+            "StringVar(", "clipboard_clear", "pack_propagate",
+            ".pack(", ".pack_forget", ".grid(", ".grid_remove",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, src,
+                                 f"仍有 tkinter 调用: {token}")
+        # after_cancel / winfo_exists 是 shim 刻意保留的兼容方法名
+        # (RootShim.after_cancel / ComboShim.winfo_exists), 属适配层
+        # 契约, 允许出现在业务代码里
+        for token in (".after_cancel(", ".winfo_exists("):
+            for m in re.finditer(re.escape(token), src):
+                before = src[max(0, m.start() - 400):m.start()]
+                line = before.splitlines()[-1] if before else ""
+                with self.subTest(token=token):
+                    self.assertTrue(
+                        "self.root" in before or "version_combo" in before,
+                        f"shim 兼容方法须经 root/shim 调用: {line.strip()}")
+
+    def test_qt_widgets_have_no_configure_method(self):
+        """回归: QLabel/QPushButton 没有 ``configure()``。
+
+        代码若从 tkinter 迁过来会写成 ``progress_label.configure(
+        text=...)``, 运行时必崩。这里显式断言"确实没有", 让后续
+        误用立刻暴露在测试阶段。
+        """
+        from PySide6 import QtWidgets
+        QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        for cls in (QtWidgets.QLabel, QtWidgets.QPushButton,
+                    QtWidgets.QComboBox):
+            with self.subTest(cls=cls.__name__):
+                self.assertFalse(hasattr(cls, "configure"),
+                                 f"{cls.__name__} 不应有 configure")
+        self.assertFalse(hasattr(QtWidgets.QProgressBar, "start"),
+                         "QProgressBar 没有 start()(那是 QProgressDialog)")
+
+    def test_buttons_always_use_qt_visibility_api(self):
+        """回归: 按钮显隐必须用 setVisible, 不能用 pack/pack_forget。"""
+        src = self._src("app.py")
+        for name in ("retry_btn", "cancel_btn", "deploy_btn"):
+            with self.subTest(btn=name):
+                hits = re.findall(rf"self\.{name}\.(?!w\.)(\w+)",
+                                  src)
+                tk_only = {"pack", "pack_forget", "grid",
+                           "grid_remove", "place", "lift", "lower"}
+                bad = [h for h in hits if h in tk_only]
+                self.assertFalse(
+                    bad, f"{name} 仍在用 tkinter 布局方法: {bad}")
+
+    def test_old_render_modules_removed(self):
+        """自绘渲染层已由Qt 取代, 不应再存在。"""
+        for name in ("ui_theme.py", "ui_widgets.py"):
+            self.assertFalse((ROOT / name).exists(),
+                             f"{name} 应随迁移删除")
+
+    def test_app_does_not_import_old_modules(self):
+        src = self._src("app.py")
+        for token in ("import ui_theme", "import ui_widgets",
+                      "UIW.", "HAS_PIL"):
+            self.assertNotIn(token, src, f"仍引用旧模块: {token}")
+
+    def test_no_handrolled_painting_of_widgets(self):
+        """约束: 不自绘底层控件, 应交给 Qt。
+
+        QPainter 只允许出现在背景光晕层; 控件一律用 Qt 原生类。
+        """
+        src = self._src("ui_qt.py")
+        classes = re.findall(r"^class (\w+)\(([^)]*)\):", src, re.M)
+        for name, base in classes:
+            with self.subTest(cls=name):
+                if name == "BackgroundWidget":
+                    continue    # 背景光晕属装饰, 允许 QPainter
+                self.assertTrue(
+                    base.strip().startswith("QtWidgets."),
+                    f"{name} 应继承 QtWidgets 控件, 实际: {base}")
+
+    def test_qss_installed_globally(self):
+        """样式必须走 QSS 全局安装, 而非逐控件设样式。"""
+        src = self._src("app.py")
         body = src.split("def _apply_ttk_styles")[1].split("\n    def ")[0]
-        for name in ("p.TROUGH", "p.GLASS_FILL", "p.TREE_SEL_BG",
-                     "p.ACCENT_A,", "p.ACCENT_B)"):
-            self.assertNotIn(name, body,
-                             f"ttk style 不应接收 RGB 元组: {name}")
+        self.assertIn("setStyleSheet", body,
+                      "需通过 QApplication.setStyleSheet 安装样式表")
+
+    def test_background_widget_is_lowest_layer(self):
+        """回归: 背景层若不在最底会被内容遮死, 玻璃特效失效。
+
+        实现方式为 ``setParent`` + ``lower()`` + 绝对几何, 而非加入
+        layout —— QVBoxLayout 会按 sizeHint 分配空间, 背景层
+        sizeHint 为 -1 会被压成零高度(实测光晕完全不显示)。
+        """
+        src = self._src("app.py")
+        body = src.split("def _assemble")[1].split("\n    def ")[0]
+        self.assertIn("bg.setParent(central)", body,
+                      "背景层需以中央区域为 parent")
+        self.assertIn("bg.lower()", body,
+                      "背景层必须 lower 到最底, 否则被内容遮住")
+        self.assertIn("bg.setGeometry(central.rect())", body,
+                      "背景层需铺满中央区域")
+        self.assertNotIn("addWidget(self.bg_canvas", body,
+                         "背景层不应加入 layout(会被压成零高)")
+
+    def test_background_resize_follows_window(self):
+        """背景层需跟随窗口尺寸, 否则拖大窗口后右侧露出纯色。"""
+        src = self._src("app.py")
+        self.assertIn("class _ResizeSync", src,
+                      "缺少随窗口尺寸同步背景层的过滤器")
+        body = src.split("class _ResizeSync")[1].split("\n\ndef ")[0]
+        self.assertIn("setGeometry", body)
+        self.assertIn("QtCore.QEvent.Type.Resize", body)
 
 
 class TestToolDataLayer(unittest.TestCase):

@@ -1,0 +1,13 @@
+# 运行期依赖
+#
+# 界面层使用 PySide6(Qt 6 官方 Python 绑定); 核心功能(工具库/下载/
+# 部署/数据校验)仍仅依赖标准库。
+#
+#   pip install -r requirements.txt
+#
+# 若只想运行数据层校验(无图形环境, 如 CI Linux 容器):
+#   python tooldata.py
+PySide6-Essentials==6.11.2
+
+# 构建 exe 时需要(不随程序分发)
+#   pip install pyinstaller

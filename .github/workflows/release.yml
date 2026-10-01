@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   release:
-    # 本项目是 Windows 专用工具(需要 tkinter), 必须在 Windows 上构建
+    # 本项目是 Windows 专用工具(需要 PySide6 GUI 插件), 必须在 Windows 上构建
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -44,28 +44,31 @@ jobs:
           Write-Host "版本号: $tag"
 
       - name: 语法检查
-        run: python -X utf8 -m py_compile app.py tools.py tooldata.py
+        run: python -X utf8 -m py_compile app.py ui_qt.py ui_bind.py tools.py tooldata.py
 
       - name: 运行单元测试
+        # 无头环境下 Qt 需要 offscreen 平台插件才能初始化
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: python -X utf8 -m unittest discover -s tests -v
 
       - name: 校验工具库
         run: python -X utf8 tooldata.py
 
       - name: 安装构建依赖
-        # 必须同时装 pillow: 它是液态玻璃界面的渲染依赖。
-        # 曾因只装 pyinstaller 导致产物缺 Pillow(11MB 而非 33MB),
-        # 玻璃特效静默失效 —— 故下面还有一道产物校验。
+        # 必须同时装 PySide6: 它是界面层的运行期依赖。
+        # 曾因只装 pyinstaller 导致产物缺渲染库(11MB 而非 33MB),
+        # 界面静默降级 —— 故下面还有一道产物校验与 Qt 模块检查。
         run: |
-          python -m pip install --upgrade "pyinstaller==6.11.1" "pillow>=10,<12"
+          python -m pip install --upgrade -r requirements.txt "pyinstaller==6.11.1"
 
       - name: 打包并校验 exe
         # id 必须保留: 后续 Release 步骤靠它读取 size/sha,
         # 缺失会导致 notes 里 SHA256 为空
         id: artifact
-        # 用 spec 而非命令行参数: spec 里声明了 PIL.ImageTk 等
-        # 延迟导入模块的 hiddenimports(静态分析抓不到),
-        # 缺了会导致玻璃特效静默失效
+        # 用 spec 而非命令行参数: spec 里声明了 Qt 各模块的
+        # hiddenimports 并排除用不到的大件(WebEngine/QML/3D),
+        # 静态分析对 Qt 支持有限, 漏配会 ImportError 或体积失控
         shell: pwsh
         run: |
           python -X utf8 -m PyInstaller build.spec
@@ -88,18 +91,20 @@ jobs:
           Write-Host "产物: $exe ($size 字节)"
           Write-Host "SHA256: $sha"
           # 缺 Pillow 时约 11MB, 完整约 33MB
-          # 缺 Pillow 时约 11MB; 含 Pillow 时 CI(win) 约 19-33MB
-          # (体积随 Pillow 版本略有差异, 权威判据是下一步的模块检查)
-          if ($size -lt 15MB) {
-            Write-Error ("产物仅 {0:N2} MB, 疑似未打包 Pillow" -f ($size / 1MB))
+          # 含 Qt 的裁剪版约 30-40MB; 若退回到纯标准库的 11MB,
+          # 说明 Qt 未打进去 —— 权威判据是下一步的 Qt 模块检查
+          if ($size -lt 25MB) {
+            Write-Error ("产物仅 {0:N2} MB, 疑似未打包 PySide6" -f ($size / 1MB))
             exit 1
           }
           "size=$size" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "sha=$sha"   | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: 校验 Pillow 渲染模块已内嵌
-        run: |
-          python -X utf8 -c "import pathlib,glob;f=glob.glob(r'dist\*.exe');assert f,'dist 下无 exe';print('检查',f[0]);d=pathlib.Path(f[0]).read_bytes();m=['PIL.Image','PIL.ImageTk','PIL.ImageDraw','PIL.ImageFilter','PIL.ImageChops'];miss=[x for x in m if x.encode() not in d];print('Pillow 模块缺失:',miss) if miss else print('Pillow 模块完整');raise SystemExit(1 if miss else 0)"
+      - name: 校验 Qt 运行时已内嵌
+        # 缺 Qt 时程序仍能启动但界面全黑/无控件, 属静默故障。
+        # 独立成脚本而非内联 python -c: GitHub Actions 的默认 shell
+        # 会把多行 here-string 拆成多条命令, 内联写法不可靠。
+        run: python -X utf8 check_qt_runtime.py
 
       - name: 创建或更新 Release
         shell: pwsh

@@ -15,8 +15,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TARGETS = ["app.py", "tools.py", "tooldata.py",
-           "ui_theme.py", "ui_widgets.py",
-           "tests/test_app.py", "tests/selfcheck.py"]
+           "ui_qt.py", "ui_bind.py", "check_qt_runtime.py",
+           "tests/test_app.py", "tests/smoke_ui.py",
+           "tests/selfcheck.py"]
 MAX_LINE = 100
 
 errors = []

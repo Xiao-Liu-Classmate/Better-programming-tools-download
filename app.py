@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""编程工具下载器 v4.0 (Windows / Python + Tkinter)
+"""编程工具下载器 (Windows / Python + PySide6)
 
 功能:
 - 28 款主流编程工具,官方直链,支持选择版本
@@ -10,6 +10,10 @@
 - 自动识别系统,优先 urllib 下载,CDN 屏蔽时自动切换 curl.exe
 - 下载失败时引导打开官网下载页,并诊断本机 hosts 屏蔽
 - 搜索/分类筛选,进度条,已用时间/预估剩余时间
+
+界面层由 PySide6(Qt 6) 承载: 渲染、控件、布局全部使用 Qt 原生
+API, 仅业务层与界面之间的交互经 ``ui_bind`` 适配, 以保持下载、
+部署、批量队列等业务逻辑与视觉实现解耦。
 """
 
 import base64
@@ -18,19 +22,17 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
-import tkinter as tk
 import urllib.parse
 import urllib.request
 import webbrowser
-from tkinter import (
-    StringVar, Tk,
-    filedialog, messagebox, ttk,
-)
 
-import ui_theme as UI
-import ui_widgets as UIW
+from PySide6 import QtCore, QtGui, QtWidgets
+
+import ui_bind
+import ui_qt as UI
 from tooldata import (
     DEPLOY_TYPES,
     load_custom_tools as _load_custom_tools,
@@ -38,6 +40,12 @@ from tooldata import (
     validate_tool,
 )
 from tools import TOOLS, CATEGORIES
+
+# 与原 tkinter 版本同名的入口, 统一走 Qt 实现
+Var = ui_bind.Var
+StringVar = ui_bind.Var
+messagebox = ui_bind.messagebox
+filedialog = ui_bind.filedialog
 
 # ─────────────────────── 常量 ───────────────────────
 
@@ -648,22 +656,25 @@ class App:
         self._config = load_config()
 
         root.title(APP_TITLE)
-        root.geometry("1180x820")
         root.minsize(1000, 700)
+        # Qt 主窗口句柄: UI 构建阶段需要真实 QWidget 作为 parent
+        self._qwin = root._w if isinstance(root, ui_bind.RootShim) \
+            else root
         self._set_icon(root)
         self._init_theme(root)
-        self._build_background(root)
+        self._build_background(self._qwin)
         self._apply_ttk_styles()
 
         default_dir = self._config.get(
             "save_dir",
             os.path.join(os.path.expanduser("~"), "Downloads"))
-        self.save_dir = StringVar(value=default_dir)
-        self.keyword = StringVar()
 
         self._build_top()
         self._build_main()
         self._build_bottom()
+        self._assemble()
+        # Var 需在控件建好后再绑定文本
+        self.save_dir.set(default_dir)
 
         # 加载自定义工具
         custom = load_custom_tools()
@@ -679,27 +690,75 @@ class App:
         self._log(f"[{time.strftime('%H:%M:%S')}] "
                   f"程序启动, {len(TOOLS)} 个工具可用")
 
-        root.bind("<Control-f>",
-                  lambda _: self.search_entry.focus_set())
-        root.bind("<Escape>", lambda _: self.cancel_download()
-                  if self.cancel_btn["state"] == "normal" else None)
-        # 键盘导航: ↑↓ 切换工具
-        root.bind("<Up>",
-                  lambda _: self._move_selection(-1))
-        root.bind("<Down>",
-                  lambda _: self._move_selection(1))
-        # Ctrl+数字 切换分类: 由 load_category 动态绑定
-        # 常用快捷键
-        root.bind("<Control-o>",
-                  lambda _: self.open_folder())
-        root.bind("<Control-e>",
-                  lambda _: self._export_tools())
-        root.bind("<Control-i>",
-                  lambda _: self._import_tools())
-        root.bind("<Control-b>",
-                  lambda _: self.start_batch_deploy())
-        root.bind("<Return>", self._on_global_return)
-        root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._bind_shortcuts()
+
+    def _assemble(self):
+        """把三个区域按上/中/下顺序放进主窗口布局。
+
+        背景层不加入 layout: QVBoxLayout 会按sizeHint 分配空间, 而
+        背景层的 sizeHint 为 -1, 会被压成零高度(实测 bg 高度 0, 光晕
+        完全不显示)。改为以中央区域为 parent、用绝对几何铺满, 由
+        _ResizeSync 在尺寸变化时同步。
+        """
+        win = self._qwin
+        central = QtWidgets.QWidget(win)
+        lay = QtWidgets.QVBoxLayout(central)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        # 背景层: 先入中央区域, 再置于底层
+        bg = self.bg_canvas
+        # setParent 会隐式隐藏子控件, 必须显式 show(), 否则整块光晕
+        # 背景不显示(本次迁移的核心视觉目标)
+        bg.setParent(central)
+        bg.setGeometry(central.rect())
+        bg.lower()
+        bg.show()
+
+        lay.addWidget(self._top_wrap)
+        lay.addWidget(self._main_pane, 1)
+        lay.addWidget(self._bottom_wrap)
+        win.setCentralWidget(central)
+
+        self._resize_filter = _ResizeSync(self)
+        central.installEventFilter(self._resize_filter)
+        bg.refresh()
+
+    # ──────────── 快捷键 ────────────
+
+    def _bind_shortcuts(self):
+        """键盘快捷键(替代 tkinter bind)"""
+        def sc(seq, fn):
+            s = QtGui.QShortcut(QtGui.QKeySequence(seq), self._qwin)
+            s.activated.connect(fn)
+
+        sc("Ctrl+F", lambda: self.search_entry.setFocus())
+        sc("Esc", lambda: self.cancel_download()
+           if "disabled" not in self.cancel_btn.state() else None)
+        sc("Ctrl+O", lambda: self.open_folder())
+        sc("Ctrl+E", lambda: self._export_tools())
+        sc("Ctrl+I", lambda: self._import_tools())
+        sc("Ctrl+B", lambda: self.start_batch_deploy())
+        sc("Ctrl+Return", lambda: self._on_global_return())
+        # 关闭时保存配置并置_closing(closeEvent 非信号, 须用事件过滤器)
+        self._close_guard = _CloseGuard(self)
+        self._qwin.installEventFilter(self._close_guard)
+        # ↑↓ 仅在工具列表获得焦点时移动选择
+        for key, delta in (("Up", -1), ("Down", 1)):
+            s = QtGui.QShortcut(QtGui.QKeySequence(key), self.tool_view)
+            s.setContext(QtCore.Qt.ShortcutContext.WidgetShortcut)
+            s.activated.connect(
+                lambda d=delta: self._move_selection(d))
+
+    def _on_global_return(self, event=None):
+        """全局回车: 仅焦点在工具列表时触发一键部署"""
+        try:
+            if self.root.focus_get() is not self.tool_view:
+                return None
+        except Exception:
+            return None
+        self.start_deploy()
+        return "break"
 
     def _switch_category_by_index(self, idx):
         """Ctrl+数字 快速切换分类"""
@@ -711,16 +770,6 @@ class App:
     def _on_search_return(self, _event=None):
         """搜索框回车: 下载并阻止冒泡到全局绑定"""
         self.start_download()
-        return "break"
-
-    def _on_global_return(self, event=None):
-        """全局回车: 仅焦点在工具列表时触发一键部署"""
-        try:
-            if self.root.focus_get() is not self.tool_tree:
-                return None
-        except Exception:
-            return None
-        self.start_deploy()
         return "break"
 
     @staticmethod
@@ -737,276 +786,63 @@ class App:
     # ──────────── 主题 / 视觉 ────────────
 
     def _init_theme(self, root):
-        """初始化液态玻璃主题: 字体、调色板、窗口底色"""
-        self._pal = UI.Palette
+        """初始化液态玻璃主题: 字体、配色、全局样式表"""
+        self._pal = UI.PAL
         self._fonts = UI.load_fonts()
-        self._bg_photo = None
-        self._bg_pil = None          # 供玻璃面板取切片
-        self._bg_id = None
-        self._bg_size = (0, 0)
         self._bg_pending = None
-        self._color_key_ok = False
-        self._panels = []            # 已创建的玻璃面板(背景变化时重绘)
-        try:
-            root.configure(bg=self._pal.BG_MID_HEX)
-        except tk.TclError:
-            pass
-        # 让 Treeview 在深色底上正常显示
-        try:
-            style = ttk.Style(root)
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
+        self._panels = []
 
     def _build_background(self, root):
-        """铺一层 Pillow 生成的渐变光晕背景。
+        """铺设 Qt 绘制的渐变光晕背景层。
 
-        Tk 不支持 backdrop-filter 与"只让某一层透明"。用
-        -transparentcolor 做色键透明是**错的** —— 同色即全透明,
-        会把 Treeview / 日志区 / 卡片等同样使用该底色的控件一起
-        挖空(实测整窗变黑)。
-
-        这里采用 pack 层叠: 背景 Canvas 先 pack 铺满 root, 三个
-        内容区域再依次 pack 到 root(排在 Canvas 之后即在其上方)。
-        玻璃卡片各自裁一块背景切片作底衬, 因此卡片区域能真正
-        "透出"光晕, 且与卡片外的背景连续。
+        Tk 版靠 Pillow 逐像素合成(因 Tk 不支持 backdrop-filter);
+        Qt 版直接用 ``QPainter`` 画径向光晕, 由引擎负责合成,
+        并随窗口尺寸变化重绘。
         """
-        if not UI.HAS_PIL:
-            self.content = root
-            return
-
-        key = self._pal.BG_MID_HEX
-
-        # 背景层: 用 place 而非 pack —— pack 会参与空间分配并把
-        # 其它 pack 控件挤走; place 完全不参与布局, 只是铺满一张底图
-        self.bg_canvas = tk.Canvas(
-            root, highlightthickness=0, bd=0, background=key)
-        self.bg_canvas.place(x=0, y=0, relwidth=1, relheight=1)
-        # Canvas.lower 需要 tagOrId, 缺参会抛 TclError
-        try:
-            self.bg_canvas.tag_lower("all")
-        except tk.TclError:
-            pass
-
-        root.bind("<Configure>", self._on_root_resize, add="+")
+        self.bg_canvas = UI.BackgroundWidget(root)
+        self.bg_canvas.show()
+        self.bg_canvas.lower()
         self.root.after(80, self._refresh_background)
+        return self.bg_canvas
 
     def _on_root_resize(self, event=None):
-        # 只响应根窗口自身的事件
-        if event is not None and event.widget is not self.root:
-            return
-        w = max(2, self.root.winfo_width())
-        h = max(2, self.root.winfo_height())
-        if abs(w - self._bg_size[0]) < 24 and abs(h - self._bg_size[1]) < 24:
-            return
-        # 去抖: 背景是纯装饰, 拖动窗口时没必要每像素重建,
-        # 否则会阻塞主线程(生成一张全屏图并不便宜)
-        if self._bg_pending is not None:
-            return
-        try:
-            self._bg_pending = self.root.after(
-                180, self._do_refresh_background)
-        except tk.TclError:
-            self._bg_pending = None
+        # Qt 版背景由 BackgroundWidget.resizeEvent 自行重绘,
+        # 此处保留空实现以兼容旧调用点。
+        pass
 
-    def _do_refresh_background(self):
-        self._bg_pending = None
-        self._refresh_background()
+    def _refresh_background(self):
+        bg = getattr(self, "bg_canvas", None)
+        if bg is not None and not self._closing:
+            bg.refresh()
 
-    def _glass(self, master, **kw):
-        """构造玻璃面板, 并注入背景切片回调(实现"透出")"""
-        p = UIW.GlassPanel(master, bg_provider=self._bg_slice, **kw)
+    def _glass(self, master, radius=18, shadow=True):
+        """构造玻璃卡片(QSS 半透明 + QGraphicsDropShadowEffect)
+
+        ``shadow=False`` 用于嵌套卡片(内层不挂特效, 避免重影)。
+        """
+        p = UI.GlassCard(master, radius=radius, shadow=shadow)
         self._panels.append(p)
         return p
 
-    def _bg_slice(self, w, h):
-        """取窗口背景图的 (w, h) 区域, 供玻璃面板作为底衬。
-
-        没有整窗背景时返回 None, 面板退化为深色实底。
-        """
-        img = self._bg_pil
-        if img is None or w <= 0 or h <= 0:
-            return None
-        W, H = img.size
-        if W < w or H < h:
-            return None
-        # 按面板在窗口中的位置取对应区域, 保留背景的连续感
-        try:
-            x = max(0, min(W - w, self.winfo_rootx()
-                           - self.root.winfo_rootx()))
-            y = max(0, min(H - h, self.winfo_rooty()
-                           - self.root.winfo_rooty()))
-        except Exception:
-            return None
-        return img.crop((x, y, x + w, y + h))
-
-    def _refresh_background(self):
-        """生成并显示背景图(限流, 避免拖动窗口时卡顿)"""
-        if not UI.HAS_PIL:
-            return
-        if self._closing:
-            return
-        w = max(2, self.root.winfo_width())
-        h = max(2, self.root.winfo_height())
-        if w < 100 or h < 100:
-            return
-        if abs(w - self._bg_size[0]) < 24 and abs(h - self._bg_size[1]) < 24:
-            return
-        self._bg_size = (w, h)
-        try:
-            img = UI.make_background(w, h, self._pal)
-        except Exception:
-            return
-        if img is None:
-            return
-        from PIL import ImageTk
-        self._bg_pil = img
-        self._bg_photo = ImageTk.PhotoImage(img)
-        if self._bg_id is None:
-            self._bg_id = self.bg_canvas.create_image(
-                0, 0, anchor="nw", image=self._bg_photo)
-        else:
-            self.bg_canvas.itemconfigure(
-                self._bg_id, image=self._bg_photo)
-        # 背景变了, 各玻璃面板的底衬切片需重算
-        if not self._closing:
-            try:
-                self.root.after_idle(self._refresh_panels)
-            except tk.TclError:
-                pass
-
-    def _refresh_panels(self):
-        """通知所有玻璃面板重绘(背景切片变了)"""
-        for w in self._panels:
-            try:
-                w.set_bg_provider(self._bg_slice)
-            except Exception:
-                pass
-
     def _apply_ttk_styles(self):
-        """深度定制 ttk 控件, 使其融入深色玻璃主题"""
-        p = self._pal
-        f = self._fonts
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        # Treeview(工具列表 / 分类)
-        style.configure(
-            "Glass.Treeview",
-            background=p.BG_MID_HEX,
-            fieldbackground=p.BG_MID_HEX,
-            foreground=p.TREE_FG,
-            rowheight=34,
-            borderwidth=0,
-            relief="flat",
-            font=(f["ui"], 9))
-        style.map(
-            "Glass.Treeview",
-            background=[("selected", "#4F8BFF")],
-            foreground=[("selected", "#FFFFFF")])
-        style.layout("Glass.Treeview", [(
-            "Glass.Treeview.treearea", {"sticky": "nswe"})])
-        style.configure(
-            "Glass.Treeview.Heading",
-            background=p.BG_MID_HEX,
-            foreground=p.TREE_HEAD_FG,
-            relief="flat",
-            borderwidth=0,
-            padding=(8, 9),
-            font=(f["ui_bold"], 9))
-        style.map(
-            "Glass.Treeview.Heading",
-            background=[("active", p.BG_MID_HEX)])
-        # 去掉表头默认的按钮/边框元素, 保留纯标签
-        style.layout("Glass.Treeview.Heading", [
-            ("Glass.Treeview.Heading.label", {"sticky": "nswe"})])
-
-        # 滚动条: 细窄无边框
-        style.configure(
-            "Glass.Vertical.TScrollbar",
-            background=p.BG_MID_HEX,
-            troughcolor=p.BG_MID_HEX,
-            bordercolor=p.BG_MID_HEX,
-            lightcolor="#5A6484",
-            darkcolor="#3A4260",
-            arrowcolor=p.TEXT_DIM,
-            relief="flat",
-            borderwidth=0,
-            width=11)
-        style.map(
-            "Glass.Vertical.TScrollbar",
-            background=[("active", "#4A5578")])
-
-        # 标签
-        # 用自定义 element 去掉 clam 主题默认的 focus 高亮边框,
-        # 否则文字后面会出现一块深色矩形。
-        # element_create 重复注册会抛错, 故先探测。
-        try:
-            style.element_create(
-                "GlassLabel", "from", "clam.Label",
-                bordercolor=p.BG_MID_HEX, lightcolor=p.BG_MID_HEX,
-                darkcolor=p.BG_MID_HEX, padding=0)
-        except tk.TclError:
-            pass
-        for nm, fg in (("Glass.TLabel", p.TEXT),
-                       ("Glass.Dim.TLabel", p.TEXT_DIM),
-                       ("Glass.Status.TLabel", p.TEXT),
-                       ("Glass.Faint.TLabel", p.TEXT_FAINT),
-                       ("Glass.Title.TLabel", p.TEXT),
-                       ("Glass.Sub.TLabel", p.TEXT_FAINT)):
-            style.configure(nm, background=p.BG_MID_HEX,
-                            foreground=fg, borderwidth=0,
-                            relief="flat", element="GlassLabel")
-        style.configure("Glass.Title.TLabel",
-                        font=(f["title"], 15, "bold"))
-        style.configure("Glass.Sub.TLabel", font=(f["ui"], 8))
-        style.configure("Glass.Faint.TLabel", font=(f["ui"], 8))
-        style.configure("Glass.Dim.TLabel", font=(f["ui"], 9))
-
-        # 通用 Frame: 透明
-        style.configure("Glass.TFrame", background=p.BG_MID_HEX)
-
-        # Combobox
-        style.configure(
-            "Glass.TCombobox",
-            fieldbackground=p.BG_MID_HEX, background=p.BG_MID_HEX,
-            foreground=p.TEXT, arrowcolor=p.TEXT_DIM,
-            bordercolor=p.BG_MID_HEX, lightcolor=p.BG_MID_HEX,
-            darkcolor=p.BG_MID_HEX, borderwidth=0, relief="flat",
-            padding=(10, 7), font=(f["ui"], 9))
-        style.map(
-            "Glass.TCombobox",
-            fieldbackground=[("readonly", p.BG_MID_HEX)],
-            foreground=[("readonly", p.TEXT)],
-            selectbackground=[("readonly", p.BG_MID_HEX)],
-            selectforeground=[("readonly", p.TEXT)])
-        self.root.option_add(
-            "*TCombobox*Listbox.background", p.BG_MID_HEX)
-        self.root.option_add(
-            "*TCombobox*Listbox.foreground", p.TEXT)
-        self.root.option_add(
-            "*TCombobox*Listbox.selectBackground", "#4F8BFF")
-        self.root.option_add(
-            "*TCombobox*Listbox.selectForeground", "#FFFFFF")
-        self.root.option_add(
-            "*TCombobox*Listbox.font", (f["ui"], 9))
-
-        # 文本控件通用
-        # 注: 进度条与输入框已换成 UIW.GlassProgress / GlassEntry
-        # (均非 ttk 控件, 不吃 style), 此处不再配置 ttk 版本 ——
-        # 且 Palette 里 TROUGH 是 4 元组, 传给 ttk.Style 会抛
-        # "bad color" 导致程序无法启动。
+        """安装全局 QSS 样式表(Qt 版对应原 ttk 定制)"""
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(UI.build_qss(self._fonts))
 
     def _btn(self, master, text, command, width=104, height=34,
              accent=False):
-        """快捷构造玻璃按钮"""
-        return UIW.GlassButton(
-            master, text=text, command=command, width=width,
-            height=height, accent=accent,
-            font=(self._fonts["ui"], 9))
+        """快捷构造玻璃按钮(返回 ui_bind.Button 以兼容 state/set_state)
+
+        ``master`` 可以是 QWidget、Qt 布局对象或 None —— 后两者不作为
+        parent, 按钮改由调用方加入布局。
+        """
+        parent = master if isinstance(master, QtWidgets.QWidget) else None
+        b = UI.GradientButton(text, parent, accent=accent)
+        b.setMinimumWidth(int(width))
+        b.setMinimumHeight(int(height))
+        b.clicked.connect(command)
+        return ui_bind.Button(b)
 
     def _status_sub(self):
         """标题下方的副标题(工具总数与分类数)"""
@@ -1020,161 +856,176 @@ class App:
             return ""
 
     def _label(self, master, text="", style="Glass.TLabel", **kw):
-        return ttk.Label(master, text=text, style=style, **kw)
+        """标签: ``style`` 保留旧调用点签名, 由 QSS 统一控制外观。"""
+        lab = QtWidgets.QLabel(str(text), master)
+        lab.setFont(self._fonts["ui"])
+        anchor = kw.get("anchor")
+        if anchor:
+            amap = {"w": QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                    "e": QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                    "center": QtCore.Qt.AlignCenter}
+            lab.setAlignment(amap.get(anchor, amap["w"]))
+        if kw.get("width"):
+            lab.setFixedWidth(int(kw["width"]))
+        if kw.get("takefocus") == 0:
+            lab.setFocusPolicy(QtCore.Qt.NoFocus)
+        if kw.get("justify"):
+            lab.setWordWrap(True)
+        if kw.get("cursor"):
+            lab.setCursor(QtCore.Qt.PointingHandCursor)
+        return lab
 
     # ──────────── 界面 ────────────
 
     def _build_top(self):
-        wrap = ttk.Frame(self.root, style="Glass.TFrame")
-        wrap.pack(fill="x", padx=18, pady=(16, 0))
+        wrap = QtWidgets.QWidget(self._qwin)
+        lay = QtWidgets.QVBoxLayout(wrap)
+        lay.setContentsMargins(18, 16, 18, 0)
+        lay.setSpacing(10)
 
         # ── 标题区
-        head = ttk.Frame(wrap, style="Glass.TFrame")
-        head.pack(fill="x")
-        title_box = ttk.Frame(head, style="Glass.TFrame")
-        title_box.pack(side="left")
-        ttk.Label(title_box, text=APP_TITLE.split(" v")[0],
-                  style="Glass.Title.TLabel").pack(anchor="w")
-        ttk.Label(title_box, text=self._status_sub(),
-                  style="Glass.Sub.TLabel").pack(anchor="w",
-                                                pady=(1, 0))
+        head = QtWidgets.QWidget(wrap)
+        head_lay = QtWidgets.QHBoxLayout(head)
+        head_lay.setContentsMargins(4, 0, 4, 0)
+
+        title_box = QtWidgets.QVBoxLayout()
+        title_box.setSpacing(0)
+        t1 = QtWidgets.QLabel(APP_TITLE.split(" v")[0])
+        t1.setFont(self._fonts["size"])
+        t2 = QtWidgets.QLabel(self._status_sub())
+        t2.setFont(self._fonts["ui"])
+        t2.setStyleSheet(f"color: {self._pal.SUBTEXT};")
+        title_box.addWidget(t1)
+        title_box.addWidget(t2)
+        head_lay.addLayout(title_box)
+        head_lay.addStretch(1)
 
         # 右侧工具按钮组
-        tools_row = ttk.Frame(head, style="Glass.TFrame")
-        tools_row.pack(side="right", pady=(4, 0))
-        self._btn(tools_row, "导入工具", self._import_tools,
-                  width=92, height=32).pack(side="left", padx=(0, 8))
-        self._btn(tools_row, "导出列表", self._export_tools,
-                  width=92, height=32).pack(side="left", padx=(0, 8))
-        self._btn(tools_row, "刷新状态",
-                  lambda: self._refresh_installed(update_status=True),
-                  width=92, height=32).pack(side="left")
+        for text, cmd, w in (
+                ("导入工具", self._import_tools, 92),
+                ("导出列表", self._export_tools, 92),
+                ("刷新状态",
+                 lambda: self._refresh_installed(update_status=True), 92)):
+            b = self._btn(head, text, cmd, width=w, height=32)
+            head_lay.addWidget(b.w)
+            head_lay.addSpacing(8)
+        lay.addWidget(head)
 
         # ── 搜索 + 排序 + 保存目录
         bar = self._glass(wrap, radius=16)
-        bar.pack(fill="x", pady=(12, 0))
-        inner = ttk.Frame(bar, style="Glass.TFrame")
-        inner.pack(fill="x", padx=16, pady=12)
+        bar_lay = QtWidgets.QVBoxLayout(bar)
+        bar_lay.setContentsMargins(16, 12, 16, 12)
+        bar_lay.setSpacing(10)
 
-        # 第一行: 搜索
-        ttk.Label(inner, text="搜索", style="Glass.Faint.TLabel").pack(
-            side="left")
-        self.search_entry = UIW.GlassEntry(
-            inner, textvariable=self.keyword,
-            font=(self._fonts["ui"], 9))
-        self.search_entry.pack(side="left", fill="x", expand=True,
-                               padx=(10, 10))
+        row1 = QtWidgets.QHBoxLayout()
+        row1.setSpacing(10)
+        row1.addWidget(self._label(bar, "搜索"))
+        self.search_entry = QtWidgets.QLineEdit(bar)
+        self.search_entry.setFont(self._fonts["ui"])
+        self.search_entry.setPlaceholderText("工具名 / 版本 / 说明…")
+        self.search_entry.returnPressed.connect(self._on_search_return)
+        row1.addWidget(self.search_entry, 1)
+        self.keyword = Var(self.search_entry, "")
         self.keyword.trace_add(
             "write", lambda *_: self.filter_tools())
-        self.search_entry.bind("<Return>", self._on_search_return)
 
-        ttk.Label(inner, text="排序", style="Glass.Faint.TLabel").pack(
-            side="left", padx=(0, 8))
-        self._sort_var = StringVar(value="默认")
-        sort_combo = ttk.Combobox(
-            inner, textvariable=self._sort_var,
-            values=["默认", "名称 A-Z", "名称 Z-A", "分类"],
-            state="readonly", width=10, style="Glass.TCombobox")
-        sort_combo.pack(side="left")
-        sort_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda _: self.filter_tools())
+        row1.addWidget(self._label(bar, "排序"))
+        sort_combo = QtWidgets.QComboBox(bar)
+        sort_combo.addItems(["默认", "名称 A-Z", "名称 Z-A", "分类"])
+        sort_combo.setFont(self._fonts["ui"])
+        # 排序值直接从控件读取。若沿用游离 Var, 必须在回调里显式回写,
+        # 否则 filter_tools 读到的永远是初始值, 三种排序全部失效。
+        sort_combo.currentIndexChanged.connect(
+            lambda _i: self.filter_tools())
+        self._sort_combo = sort_combo
+        row1.addWidget(sort_combo)
+        bar_lay.addLayout(row1)
 
-        # 第二行: 保存目录
-        dir_row = ttk.Frame(inner, style="Glass.TFrame")
-        dir_row.pack(fill="x", pady=(10, 0))
-        ttk.Label(dir_row, text="保存到",
-                  style="Glass.Faint.TLabel").pack(side="left")
-        self.dir_entry = UIW.GlassEntry(
-            dir_row, textvariable=self.save_dir,
-            font=(self._fonts["mono"], 8))
-        self.dir_entry.pack(side="left", fill="x", expand=True,
-                            padx=(10, 10))
-        self._btn(dir_row, "浏览…", self._browse_dir,
-                  width=88, height=32).pack(side="left")
+        row2 = QtWidgets.QHBoxLayout()
+        row2.setSpacing(10)
+        row2.addWidget(self._label(bar, "保存到"))
+        self.dir_entry = QtWidgets.QLineEdit(bar)
+        self.dir_entry.setFont(self._fonts["mono"])
+        row2.addWidget(self.dir_entry, 1)
+        self.save_dir = Var(self.dir_entry, "")
+        row2.addWidget(self._btn(bar, "浏览…", self._browse_dir,
+                                  width=88, height=32).w)
+        bar_lay.addLayout(row2)
+
+        self._top_wrap = wrap
 
     def _build_main(self):
-        pane = ttk.Frame(self.root, style="Glass.TFrame")
-        pane.pack(fill="both", expand=True, padx=18, pady=(14, 0))
+        pane = QtWidgets.QWidget(self._qwin)
+        pane_lay = QtWidgets.QHBoxLayout(pane)
+        pane_lay.setContentsMargins(18, 14, 18, 0)
+        pane_lay.setSpacing(14)
 
         # ── 左: 分类(玻璃侧栏)
         left = self._glass(pane, radius=18)
-        left.pack(side="left", fill="y")
-        # 不锁宽高: 让 Treeview 的列宽决定面板宽度、高度由内容决定,
-        # 避免侧栏下方出现大片留白
-        left.pack_propagate(True)
+        left_lay = QtWidgets.QVBoxLayout(left)
+        left_lay.setContentsMargins(UI.PAD, UI.PAD, UI.PAD, UI.PAD)
+        left_lay.setSpacing(8)
+        left_lay.addWidget(self._label(left, "分类"))
 
-        left_body = ttk.Frame(left, style="Glass.TFrame")
-        left_body.pack(fill="both", expand=True, padx=UIW.PAD,
-                       pady=UIW.PAD)
-
-        ttk.Label(left_body, text="分类",
-                  style="Glass.Faint.TLabel",
-                  anchor="w").pack(fill="x", padx=4, pady=(0, 8))
-
-        # 分类数量有限, 用 pack 而非 expand 让树按内容高度收缩,
-        # 避免侧栏下方出现大片空白
-        cat_holder = ttk.Frame(left_body, style="Glass.TFrame")
-        cat_holder.pack(fill="x")
-
-        self.cat_tree = ttk.Treeview(
-            cat_holder, columns=("cat", "cnt"),
-            show="headings", selectmode="browse",
-            style="Glass.Treeview")
+        self.cat_view = QtWidgets.QTreeWidget(left)
+        self.cat_view.setFont(self._fonts["ui"])
+        self.cat_view.setRootIsDecorated(False)
+        self.cat_tree = ui_bind.TreeShim(
+            self.cat_view, columns=("cat", "cnt"))
         self.cat_tree.heading("cat", text="名称")
         self.cat_tree.heading("cnt", text="数量")
-        self.cat_tree.column("cat", width=148, anchor="w",
-                             stretch=True)
-        self.cat_tree.column("cnt", width=46, anchor="e",
-                             stretch=False)
-        self.cat_tree.pack(fill="x")
-        self.cat_tree.bind(
-            "<<TreeviewSelect>>", self._on_category_select)
+        self.cat_tree.column("cat", width=148, anchor="w", stretch=True)
+        self.cat_tree.column("cnt", width=46, anchor="e", stretch=False)
+        self.cat_tree.bind("<<TreeviewSelect>>", self._on_category_select)
+        left_lay.addWidget(self.cat_view)
 
-        # 快捷提示
-        ttk.Label(left_body,
-                  text="Ctrl+数字 快速切换\n双击工具 开始下载",
-                  style="Glass.Sub.TLabel",
-                  justify="left").pack(fill="x", padx=4, pady=(14, 0))
+        hint = QtWidgets.QLabel("Ctrl+数字 快速切换\n双击工具 开始下载")
+        hint.setFont(self._fonts["ui"])
+        hint.setStyleSheet(f"color: {self._pal.SUBTEXT};")
+        hint.setWordWrap(True)
+        left_lay.addWidget(hint)
+        left_lay.addStretch(1)
+        pane_lay.addWidget(left, 0)
 
         # ── 右: 工具列表
         right = self._glass(pane, radius=18)
-        right.pack(side="left", fill="both",
-                   expand=True, padx=(14, 0))
+        right_lay = QtWidgets.QVBoxLayout(right)
+        right_lay.setContentsMargins(UI.PAD, UI.PAD, UI.PAD, UI.PAD)
 
-        right_body = ttk.Frame(right, style="Glass.TFrame")
-        right_body.pack(fill="both", expand=True,
-                        padx=UIW.PAD, pady=UIW.PAD)
-
-        self.tool_tree = ttk.Treeview(
-            right_body, columns=("name", "ver", "desc", "inst"),
-            show="headings", selectmode="extended",
-            style="Glass.Treeview")
+        self.tool_view = QtWidgets.QTreeWidget(right)
+        self.tool_view.setFont(self._fonts["ui"])
+        self.tool_tree = ui_bind.TreeShim(
+            self.tool_view,
+            columns=("name", "ver", "desc", "inst"),
+            selectmode="extended")
+        # 列宽必须在 TreeShim 之后设置: 其 __init__ 会 setColumnCount
+        # 重建表头, 把此前的列宽设定全部清掉。
+        header = self.tool_view.header()
+        # 关键: 必须关掉 stretchLastSection。它默认为 True, 会与下面
+        # 为"说明"列设的 Stretch 叠加, 导致实际列宽被重算成均分
+        # (实测设定 196/132/86 却得到 196/132/237/237)。
+        # 且 Fixed 模式下要用 resizeSection, setColumnWidth 会被忽略。
+        header.setStretchLastSection(False)
+        for idx, width in ((0, 196), (1, 132), (3, 86)):
+            header.setSectionResizeMode(
+                idx, QtWidgets.QHeaderView.Fixed)
+            header.resizeSection(idx, width)
+        # 说明列占满剩余空间
+        header.setSectionResizeMode(
+            2, QtWidgets.QHeaderView.Stretch)
+        header.setDefaultAlignment(
+            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         self.tool_tree.heading("name", text="工具")
         self.tool_tree.heading("ver", text="版本")
         self.tool_tree.heading("desc", text="说明")
         self.tool_tree.heading("inst", text="状态")
-        self.tool_tree.column("name", width=196, anchor="w",
-                              stretch=False)
-        self.tool_tree.column("ver", width=132, anchor="w",
-                              stretch=False)
-        self.tool_tree.column("desc", width=330, anchor="w",
-                              stretch=True)
-        self.tool_tree.column("inst", width=86, anchor="center",
-                              stretch=False)
-
-        vsb = ttk.Scrollbar(right_body, orient="vertical",
-                             command=self.tool_tree.yview,
-                             style="Glass.Vertical.TScrollbar")
-        self.tool_tree.configure(yscrollcommand=vsb.set)
-        self.tool_tree.pack(side="left", fill="both", expand=True)
-        vsb.pack(side="right", fill="y")
-        self.tool_tree.bind(
-            "<Double-1>", lambda _: self.start_download())
-        self.tool_tree.bind(
-            "<<TreeviewSelect>>", self._on_tool_select)
-        # 右键菜单
+        self.tool_tree.bind("<<TreeviewSelect>>", self._on_tool_select)
+        self.tool_tree.bind("<Double-1>", lambda _e: self.start_download())
         self.tool_tree.bind("<Button-3>", self._show_context_menu)
+        right_lay.addWidget(self.tool_view)
+        pane_lay.addWidget(right, 1)
+
+        self._main_pane = pane
 
     def _show_context_menu(self, event):
         """工具列表右键菜单"""
@@ -1194,53 +1045,45 @@ class App:
                 self._ctx_menu.destroy()
             except Exception:
                 pass
-        menu = tk.Menu(
-            self.root,
-            bg=self._pal.BG_BOT_HEX,
-            fg=self._pal.TEXT,
-            activebackground=self._pal.ACCENT_A_HEX,
-            activeforeground="#FFFFFF",
-            bd=0, relief="flat",
-            font=(self._fonts["ui"], 9),
-            tearoff=0)
+        menu = QtWidgets.QMenu(self._qwin)
         self._ctx_menu = menu
-        try:
-            menu.configure(highlightthickness=0)
-        except tk.TclError:
-            pass
 
-        menu.add_command(label="一键部署",
-                         command=self.start_deploy)
-        menu.add_command(label="仅下载",
-                         command=self.start_download)
-        menu.add_separator()
+        menu.addAction("一键部署", self.start_deploy)
+        menu.addAction("仅下载", self.start_download)
+        menu.addSeparator()
 
         url = (self.current_versions[0]["url"]
                if self.current_versions else "")
         if url:
-            menu.add_command(
-                label="复制下载链接",
-                command=lambda: self._copy_text(url))
+            menu.addAction(
+                "复制下载链接", lambda: self._copy_text(url))
 
         homepage = tool.get("homepage")
         if homepage:
-            menu.add_command(
-                label="打开官网下载页",
-                command=lambda: webbrowser.open(homepage))
+            menu.addAction(
+                "打开官网下载页", lambda: webbrowser.open(homepage))
 
-        menu.add_separator()
-        menu.add_command(label="查看详情",
-                         command=lambda: self._show_tool_detail(tool))
-        menu.add_command(label="打开保存目录",
-                         command=self.open_folder)
+        menu.addSeparator()
+        menu.addAction("查看详情", lambda: self._show_tool_detail(tool))
+        menu.addAction("打开保存目录", self.open_folder)
 
-        menu.tk_popup(event.x_root, event.y_root)
-        # tk_popup 会 grab, 弹出后释放避免阻塞键盘
-        self.root.after(1, menu.grab_release)
+        # 延迟弹出: 当前调用发生在 _MouseFilter.eventFilter 内(事件
+        # 过滤回调), 在事件过滤器里 exec() 会开启嵌套事件循环, 期间
+        # 再次右键会重入本函数并销毁正在 exec() 的菜单, 导致崩溃。
+        pos = QtGui.QCursor.pos()
+        self.root.after(0, lambda: self._exec_menu(menu, pos))
+
+    @staticmethod
+    def _exec_menu(menu, pos):
+        try:
+            menu.exec(pos)
+        except RuntimeError:
+            pass        # 窗口已销毁
+        finally:
+            menu.deleteLater()
 
     def _copy_text(self, text):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
+        QtWidgets.QApplication.clipboard().setText(text)
         ts = time.strftime("%H:%M:%S")
         self._log(f"[{ts}] 已复制: {text[:60]}...")
 
@@ -1384,131 +1227,154 @@ class App:
             f"详情 - {tool['name']}", "\n".join(lines))
 
     def _build_bottom(self):
-        bottom = ttk.Frame(self.root, style="Glass.TFrame")
-        bottom.pack(fill="x", padx=18, pady=(14, 14))
+        bottom = QtWidgets.QWidget(self._qwin)
+        outer = QtWidgets.QVBoxLayout(bottom)
+        outer.setContentsMargins(18, 14, 18, 14)
+        outer.setSpacing(12)
 
-        # ── 上: 状态 + 进度(单行紧凑布局)
+        # ── 上: 状态 + 进度
         prog_card = self._glass(bottom, radius=18)
-        prog_card.pack(fill="x")
-        prog_in = ttk.Frame(prog_card, style="Glass.TFrame")
-        prog_in.pack(fill="x", padx=18, pady=13)
+        prog_lay = QtWidgets.QVBoxLayout(prog_card)
+        prog_lay.setContentsMargins(18, 13, 18, 13)
+        prog_lay.setSpacing(6)
 
-        self.status = StringVar(value="就绪 — 双击工具即可开始下载")
-        self.status_label = ttk.Label(
-            prog_in, textvariable=self.status,
-            style="Glass.Status.TLabel", takefocus=0)
-        self.status_label.pack(
-            side="left", fill="x", expand=False)
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(12)
+        self.status_label = QtWidgets.QLabel(
+            "就绪 — 双击工具即可开始下载")
+        self.status_label.setFont(self._fonts["ui"])
+        self.status = Var(self.status_label,
+                          "就绪 — 双击工具即可开始下载")
+        row.addWidget(self.status_label, 1)
 
-        self.progress_label = ttk.Label(
-            prog_in, text="", width=28, anchor="e",
-            style="Glass.Faint.TLabel")
-        self.progress_label.pack(side="right")
+        self._prog_widget = UI.GradientProgressBar(prog_card)
+        self.progress = ui_bind.ProgressShim(self._prog_widget)
+        self._prog_widget.setFixedWidth(180)
+        row.addWidget(self._prog_widget)
 
-        self.progress = UIW.GlassProgress(
-            prog_in, height=8, mode="determinate", width=180)
-        self.progress.pack(side="right", padx=(14, 12))
+        self.progress_label = QtWidgets.QLabel("")
+        self.progress_label.setFont(self._fonts["mono"])
+        self.progress_label.setAlignment(
+            QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        self.progress_label.setMinimumWidth(240)
+        row.addWidget(self.progress_label)
+        prog_lay.addLayout(row)
 
-        # URL 显示(单独一行, 避免长链接挤压进度条)
-        # 初始为空时整行隐藏, 避免状态区出现无意义的空白条
-        self.url_var = StringVar(value="")
-        url_row = ttk.Frame(prog_card, style="Glass.TFrame")
-        self._url_row = url_row
-        url_row.pack(fill="x", padx=18, pady=(0, 12))
-        self.url_label = ttk.Label(
-            url_row, textvariable=self.url_var,
-            style="Glass.Faint.TLabel", anchor="w", cursor="hand2")
-        self.url_label.pack(fill="x", expand=True)
-        self.url_label.bind("<Button-3>", self._copy_url)
-        self.url_label.bind("<Button-1>", self._copy_url)
+        # URL 单独一行, 避免长链接挤压进度条
+        self.url_label = QtWidgets.QLabel("")
+        self.url_label.setFont(self._fonts["mono"])
+        self.url_label.setStyleSheet(f"color: {self._pal.FAINT};")
+        self.url_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+            | QtCore.Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.url_label.setCursor(QtCore.Qt.PointingHandCursor)
+        self.url_var = Var(self.url_label, "")
+        # 点击 URL 复制到剪贴板(旧版有此交互, 迁移时若遗漏 _copy_url
+        # 会变成死代码)。QLabel 默认不转发鼠标事件, 需显式安装过滤器。
+        self._url_click_filter = _UrlClick(self)
+        self.url_label.installEventFilter(self._url_click_filter)
+        prog_lay.addWidget(self.url_label)
+        outer.addWidget(prog_card)
 
         # ── 下: 操作区 + 日志
         act = self._glass(bottom, radius=18)
-        act.pack(fill="x", pady=(12, 0))
-        act_in = ttk.Frame(act, style="Glass.TFrame")
-        act_in.pack(fill="x", padx=16, pady=12)
+        act_lay = QtWidgets.QHBoxLayout(act)
+        act_lay.setContentsMargins(16, 12, 16, 12)
+        act_lay.setSpacing(16)
 
-        # 左: 版本 + 按钮
-        left_col = ttk.Frame(act_in, style="Glass.TFrame")
-        left_col.pack(side="left", fill="y")
+        left_col = QtWidgets.QVBoxLayout()
+        left_col.setSpacing(10)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setSpacing(8)
+        ver_lbl = QtWidgets.QLabel("版本")
+        ver_lbl.setFont(self._fonts["ui"])
+        btn_row.addWidget(ver_lbl)
 
-        btn_row = ttk.Frame(left_col, style="Glass.TFrame")
-        btn_row.pack(anchor="w")
-
-        ttk.Label(btn_row, text="版本",
-                  style="Glass.Faint.TLabel").pack(side="left")
-        self.version_combo = ttk.Combobox(
-            btn_row, state="readonly", width=20,
-            style="Glass.TCombobox")
-        self.version_combo.pack(side="left", padx=(8, 12))
+        _version_combo = QtWidgets.QComboBox()
+        _version_combo.setFont(self._fonts["ui"])
+        _version_combo.setMinimumWidth(150)
+        # 对外暴露 shim: 业务侧沿用 ttk Combobox 写法
+        self.version_combo = ui_bind.ComboShim(_version_combo)
+        btn_row.addWidget(_version_combo)
 
         self.deploy_btn = self._btn(
-            btn_row, "一键部署", self.start_deploy,
+            None, "一键部署", self.start_deploy,
             width=108, height=32, accent=True)
-        self.deploy_btn.pack(side="left")
+        btn_row.addWidget(self.deploy_btn.w)
 
         self.batch_btn = self._btn(
-            btn_row, "批量部署", self.start_batch_deploy,
+            None, "批量部署", self.start_batch_deploy,
             width=98, height=32)
-        self.batch_btn.pack(side="left", padx=(8, 0))
+        btn_row.addWidget(self.batch_btn.w)
 
         self.download_btn = self._btn(
-            btn_row, "仅下载", self.start_download, width=88, height=32)
-        self.download_btn.pack(side="left", padx=(8, 0))
+            None, "仅下载", self.start_download, width=88, height=32)
+        btn_row.addWidget(self.download_btn.w)
 
         self.retry_btn = self._btn(
-            btn_row, "重试", self._retry_current, width=78, height=32)
-        self.retry_btn.pack(side="left", padx=(8, 0))
-        self.retry_btn.pack_forget()     # 初始隐藏, 失败后再显示
+            None, "重试", self._retry_current, width=78, height=32)
+        btn_row.addWidget(self.retry_btn.w)
+        self.retry_btn.w.setVisible(False)   # 失败后才显示
 
         self.cancel_btn = self._btn(
-            btn_row, "取消", self.cancel_download, width=78, height=32)
-        self.cancel_btn.pack(side="left", padx=(8, 0))
+            None, "取消", self.cancel_download, width=78, height=32)
+        btn_row.addWidget(self.cancel_btn.w)
         self.cancel_btn.set_state("disabled")
+        left_col.addLayout(btn_row)
+        left_col.addStretch(1)
+        act_lay.addLayout(left_col, 0)
 
-        # 右: 日志
-        log_card = self._glass(act_in, radius=14)
-        log_card.pack(side="right", fill="both", expand=True,
-                      padx=(16, 0))
+        # 日志卡片
+        log_card = UI.GlassCard(act, radius=14, shadow=False)
+        log_lay = QtWidgets.QVBoxLayout(log_card)
+        log_lay.setContentsMargins(12, 8, 12, 10)
+        log_lay.setSpacing(6)
 
-        log_top = ttk.Frame(log_card, style="Glass.TFrame")
-        log_top.pack(fill="x", padx=(12, 12), pady=(8, 2))
-        ttk.Label(log_top, text="部署日志",
-                  style="Glass.Faint.TLabel").pack(side="left")
-        self._btn(log_top, "导出", self._export_log,
-                  width=58, height=24).pack(side="right")
-        self._btn(log_top, "清空", self._clear_log,
-                  width=58, height=24).pack(side="right", padx=(0, 6))
+        log_top = QtWidgets.QHBoxLayout()
+        lbl = QtWidgets.QLabel("部署日志")
+        lbl.setFont(self._fonts["ui"])
+        lbl.setStyleSheet(f"color: {self._pal.SUBTEXT};")
+        log_top.addWidget(lbl)
+        log_top.addStretch(1)
+        b_clear = self._btn(log_top, "清空", self._clear_log,
+                            width=58, height=24)
+        log_top.addWidget(b_clear.w, 0, QtCore.Qt.AlignTop)
+        b_exp = self._btn(log_top, "导出", self._export_log,
+                          width=58, height=24)
+        log_top.addWidget(b_exp.w, 0, QtCore.Qt.AlignTop)
+        log_lay.addLayout(log_top)
 
-        log_body = ttk.Frame(log_card, style="Glass.TFrame")
-        log_body.pack(fill="both", expand=True, padx=(12, 12),
-                      pady=(0, 10))
-        self.log_text = tk.Text(
-            log_body, height=3, font=(self._fonts["mono"], 8),
-            state="disabled", wrap="word",
-            background="#10132A", foreground="#C9D3EA",
-            insertbackground="#FFFFFF",
-            selectbackground="#4F8BFF", selectforeground="#FFFFFF",
-            relief="flat", borderwidth=0, highlightthickness=0,
-            padx=10, pady=6)
-        log_scroll = ttk.Scrollbar(
-            log_body, orient="vertical",
-            command=self.log_text.yview,
-            style="Glass.Vertical.TScrollbar")
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        self.log_text.pack(side="left", fill="both", expand=True)
-        log_scroll.pack(side="right", fill="y")
+        self._log_widget = QtWidgets.QPlainTextEdit(log_card)
+        self._log_widget.setFont(self._fonts["mono"])
+        self._log_widget.setReadOnly(True)
+        self._log_widget.setFixedHeight(84)
+        self._log_widget.setStyleSheet(
+            f"QPlainTextEdit {{ background: {self._pal.LOG_BG};"
+            f" color: {self._pal.LOG_FG};"
+            " border: 1px solid rgba(255,255,255,26);"
+            " border-radius: 8px; }")
+        self.log_text = ui_bind.TextShim(self._log_widget)
+        log_lay.addWidget(self._log_widget)
+        act_lay.addWidget(log_card, 1)
+        outer.addWidget(act)
 
         # ── 页脚
-        foot = ttk.Frame(bottom, style="Glass.TFrame")
-        foot.pack(fill="x", pady=(10, 0))
-        ttk.Label(foot, text="核心功能仅依赖标准库 · "
-                             "安装 Pillow 可获得玻璃特效",
-                  style="Glass.Sub.TLabel").pack(side="left")
-        self._btn(foot, "关于", self._show_about,
-                  width=72, height=26).pack(side="right")
-        self._btn(foot, "打开下载目录", self.open_folder,
-                  width=118, height=26).pack(side="right", padx=(0, 8))
+        foot = QtWidgets.QHBoxLayout()
+        foot_lbl = QtWidgets.QLabel(
+            "界面由 PySide6 (Qt 6) 渲染 · 核心功能仅依赖标准库")
+        foot_lbl.setFont(self._fonts["ui"])
+        foot_lbl.setStyleSheet(f"color: {self._pal.FAINT};")
+        foot.addWidget(foot_lbl)
+        foot.addStretch(1)
+        foot.addWidget(self._btn(
+            foot, "打开下载目录", self.open_folder,
+            width=118, height=26).w)
+        foot.addSpacing(8)
+        foot.addWidget(self._btn(
+            foot, "关于", self._show_about, width=72, height=26).w)
+        outer.addLayout(foot)
+
+        self._bottom_wrap = bottom
 
     # ──────────── 分类 ────────────
 
@@ -1531,20 +1397,38 @@ class App:
                                  values=(cat, cnt))
         self.cat_tree.selection_set("all")
         self._bind_category_shortcuts()
+        self._fit_cat_height()
+
+    def _fit_cat_height(self):
+        """按分类数收缩分类树高度。
+
+        必须在数据填充后调用 —— 构建期拿不到行高(此时模型为空),
+        提前设固定高度会把内容压没(实测分类列表整片消失)。
+        留一行余量给滚动条, 避免正好卡在边界上多出一根无用滚动条。
+        """
+        n = len(self.cat_tree.get_children())
+        if n <= 0:
+            return
+        row = self.cat_view.sizeHintForRow(0)
+        if row <= 0:
+            row = 24                     # 模型尚未完成布局时的兜底
+        head = self.cat_view.header().height()
+        target = row * (n + 1) + head + 8
+        self.cat_view.setFixedHeight(target)
 
     def _bind_category_shortcuts(self):
         """按实际分类数绑定 Ctrl+0~9"""
         count = len(self.cat_tree.get_children())
-        for i in range(10):
-            try:
-                self.root.unbind(f"<Control-Key-{i}>")
-            except Exception:
-                pass
+        for old in getattr(self, "_cat_shortcuts", []):
+            old.setEnabled(False)
+            old.deleteLater()
+        self._cat_shortcuts = []
         for i in range(min(count, 10)):
-            self.root.bind(
-                f"<Control-Key-{i}>",
-                lambda e, idx=i:
-                self._switch_category_by_index(idx))
+            s = QtGui.QShortcut(
+                QtGui.QKeySequence(f"Ctrl+{i}"), self._qwin)
+            s.activated.connect(
+                lambda idx=i: self._switch_category_by_index(idx))
+            self._cat_shortcuts.append(s)
 
     def _on_category_select(self, _):
         sel = self.cat_tree.selection()
@@ -1580,9 +1464,10 @@ class App:
                 continue
             candidates.append(tool)
 
-        # 排序
-        sort_key = self._sort_var.get() if hasattr(
-            self, '_sort_var') else "默认"
+        # 排序: 直接读下拉框当前文本(与控件始终同步)
+        sort_combo = getattr(self, "_sort_combo", None)
+        sort_key = (sort_combo.currentText() if sort_combo is not None
+                    else "默认")
         if sort_key == "名称 A-Z":
             candidates.sort(key=lambda t: str(t.get("name", "")))
         elif sort_key == "名称 Z-A":
@@ -1613,10 +1498,10 @@ class App:
         # tag 配色需适配深色玻璃主题: 原先用适配白底的深绿/浅蓝,
         # 在深色底上会刺眼且对比不足
         self.tool_tree.tag_configure(
-            "installed", foreground=self._pal.OK_HEX)
+            "installed", foreground=self._pal.OK)
         self.tool_tree.tag_configure(
             "downloading", background="#2A3550",
-            foreground=self._pal.ACCENT_C_HEX)
+            foreground=self._pal.ACCENT_C)
 
         if not update_status:
             return
@@ -1761,8 +1646,7 @@ class App:
         """点击/右键 URL 标签复制到剪贴板"""
         url = self.url_var.get()
         if url:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(url)
+            QtWidgets.QApplication.clipboard().setText(url)
             ts = time.strftime("%H:%M:%S")
             self._log(f"[{ts}] 已复制 URL 到剪贴板")
             # 短暂反馈: 独立 id 管理, 任务启动时会被一并取消
@@ -2029,9 +1913,9 @@ class App:
             f"({version['label']}) ...")
         self.url_var.set(version["url"])
         self._set_buttons(downloading=True)
-        self.retry_btn.pack_forget()
+        self.retry_btn.w.setVisible(False)
         self.progress.configure(value=0)
-        self.progress_label.configure(text="")
+        self.progress_label.setText("")
 
         ts = time.strftime("%H:%M:%S")
         self._log(f"[{ts}] {mode}开始: "
@@ -2122,7 +2006,7 @@ class App:
                 remaining = (total - downloaded) / speed
                 text += f"  ETA {human_time(remaining)}"
         text += f"  ({human_time(elapsed)})"
-        self.progress_label.configure(text=text)
+        self.progress_label.setText(text)
 
     # ──────────── 下载完成 ────────────
 
@@ -2205,7 +2089,7 @@ class App:
         if "失败" not in msg:
             return
         # 间距须与 _build_bottom 初始 pack 一致, 否则重显时按钮会跳动
-        self.retry_btn.pack(side="left", padx=(8, 0))
+        self.retry_btn.w.setVisible(True)
         tool = self._active_tool or self.current_tool
         homepage = tool.get("homepage") if tool else None
 
@@ -2255,7 +2139,7 @@ class App:
             return
         # 重置进度
         self.progress.configure(value=0)
-        self.progress_label.configure(text="")
+        self.progress_label.setText("")
         self._begin_download(tool, version)
 
     # ──────────── 安装 ────────────
@@ -2275,8 +2159,8 @@ class App:
         # 安装动画: 不确定进度
         self._install_start = time.time()
         self.progress.configure(mode="indeterminate")
-        self.progress.start(80)
-        self.progress_label.configure(text="安装中...")
+        self.progress.configure(mode="indeterminate")
+        self.progress_label.setText("安装中...")
 
         # 批量进度显示
         if self._batch_queue:
@@ -2301,9 +2185,9 @@ class App:
     def _finish_install(self, ok, msg, elapsed=0, seq=0):
         if seq != self._task_seq:
             return                      # 过期任务的迟到回调
-        self.progress.stop()
         self.progress.configure(mode="determinate")
-        self.progress_label.configure(text="")
+        self.progress.configure(mode="determinate")
+        self.progress_label.setText("")
         tool = self._active_tool or self.current_tool
         tool_name = tool["name"] if tool else ""
         ts = time.strftime("%H:%M:%S")
@@ -2385,7 +2269,7 @@ class App:
         self._clear_highlight()
         self.status.set(f"{tool_name}: {msg}")
         # 与下载失败保持一致: 提供手动重试入口
-        self.retry_btn.pack(side="left", padx=(8, 0))
+        self.retry_btn.w.setVisible(True)
         tool = self._active_tool or self.current_tool
         homepage = tool.get("homepage") if tool else None
         text = f"{tool_name} {msg}"
@@ -2417,8 +2301,7 @@ class App:
             f"• 自动重试 (最多2次)\n"
             f"• 自动切换 urllib/curl 下载\n"
             f"• 设置自动持久化\n"
-            f"• 液态玻璃界面"
-            + ("" if UI.HAS_PIL else "(需安装 Pillow 才能显示)\n")
+            f"• 液态玻璃界面 (Qt 6 渲染)"
             + f"\n\n"
             f"快捷键:\n"
             f"  Ctrl+F  聚焦搜索框\n"
@@ -2435,38 +2318,131 @@ class App:
             f"  Ctrl+点击  多选工具\n\n"
             f"--- 系统信息 ---\n"
             f"{sys_info}\n\n"
-            f"技术栈: Python + Tkinter"
+            f"技术栈: Python + PySide6 (Qt 6)"
         )
         messagebox.showinfo("关于", about)
 
     # ──────────── 关闭 ────────────
 
+    def _on_close_event(self, event=None):
+        """QMainWindow.closeEvent 入口。"""
+        if self._closing:
+            if event is not None:
+                event.accept()
+            return
+        self._on_close()
+        if event is not None:
+            event.accept()
+
     def _on_close(self):
+        # 幂等: _on_close 内部会 destroy -> close -> 再次触发
+        # closeEvent, 不加守卫会无限递归
+        if self._closing:
+            return
         # 标记关闭中: 后台线程的 after 回调不再触碰已销毁的控件
         self._closing = True
         self.cancel_event.set()
         self._cancel_pending_after()
-        # 取消待执行的背景重建(避免销毁后仍触发)
-        if self._bg_pending is not None:
-            try:
-                self.root.after_cancel(self._bg_pending)
-            except Exception:
-                pass
-            self._bg_pending = None
         self._task_seq += 1          # 作废所有在途回调
-        self._config["save_dir"] = self.save_dir.get()
-        save_config(self._config)
+        try:
+            self._config["save_dir"] = self.save_dir.get()
+            save_config(self._config)
+        except Exception:
+            pass
         self.root.destroy()
 
 
 # ─────────────────────── 入口 ───────────────────────
 
 
+class _UrlClick(QtCore.QObject):
+    """把 URL 标签上的鼠标点击转成"复制链接"。
+
+    QLabel 默认忽略鼠标事件, 迁移后原先 ``<Button-1>`` 绑定的
+    点击复制交互会消失, 故用事件过滤器补回。
+    """
+
+    def __init__(self, app_ref):
+        super().__init__()
+        self._app = app_ref
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+            copy = getattr(self._app, "_copy_url", None)
+            if copy:
+                try:
+                    copy()
+                    return True
+                except Exception:
+                    pass
+        return False
+
+
+class _CloseGuard(QtCore.QObject):
+    """拦截窗口关闭: 保存配置、置``_closing``、取消在途任务。
+
+    QWidget.closeEvent 是虚方法而非信号, 不能 ``connect``; 只能通过
+    事件过滤器捕获 QEvent.Close。不接线会导致配置不落盘, 且后台
+    线程的迟到回调仍会触碰已销毁控件。
+    """
+
+    def __init__(self, app_ref):
+        super().__init__()
+        self._app = app_ref
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Type.Close:
+            handler = getattr(self._app, "_on_close_event", None)
+            if handler:
+                try:
+                    handler(event)
+                except Exception:
+                    pass
+        return False
+
+
+class _ResizeSync(QtCore.QObject):
+    """中央区域尺寸变化时同步背景层几何。
+
+    App 本身不是 QObject, 无法直接充当 eventFilter, 故用本包装器。
+    背景层若不跟随窗口尺寸, 光晕会只占初始大小, 拖大窗口后右侧
+    露出纯色底。
+    """
+
+    def __init__(self, app_ref):
+        super().__init__()
+        self._app = app_ref
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Type.Resize:
+            bg = getattr(self._app, "bg_canvas", None)
+            if bg is not None:
+                bg.setGeometry(obj.rect())
+        return False
+
+
 def main():
-    root = Tk()
+    """Qt 应用入口。
+
+    - ``QApplication`` 必须在任何 QWidget 之前创建
+    - App 只接收窗口与 shim, 自身不依赖具体控件类型
+    """
+    QApplication = QtWidgets.QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName("编程工具下载器")
+
+    win = QtWidgets.QMainWindow()
+    win.resize(1180, 820)
+    win.setMinimumSize(1000, 700)
+    # 窗口本体透明, 由 BackgroundWidget 提供底色
+    win.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+
+    root = ui_bind.RootShim(win)
     App(root)
-    root.mainloop()
+
+    win.show()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

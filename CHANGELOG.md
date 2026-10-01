@@ -7,6 +7,22 @@
 
 ## [未发布]
 
+### 变更
+
+- **界面层迁移至 PySide6（Qt 6）**：自绘渲染层全部移除，控件、布局、
+  样式、绘制均改由 Qt 原生 API 承担
+  - 新增 `ui_qt.py`：主题引擎（QSS 样式表、玻璃卡片、渐变控件、
+    径向光晕背景）与 Qt 原生控件封装
+  - 新增 `ui_bind.py`：tkinter → Qt 适配层，使下载、部署、批量队列
+    等业务逻辑保持原样
+  - 新增 `check_qt_runtime.py`：打包产物自检（确认 Qt 运行时完整、
+    WebEngine 等大件已裁剪）
+  - 删除 `ui_theme.py`、`ui_widgets.py`（合计 930 行手写渲染）
+  - 打包体积 33.19 MB → 35.95 MB
+
+### 计划中
+
+
 ### 计划中
 
 - 断点续传：当前 `.partial_download` 每次启动即删除，无法续传
@@ -55,7 +71,7 @@ Gitee `0655D2C03DF6A992E04B5BB78F6E33E2CEDEE3403B3661D39C0A0DB4B953460F`
 
 ### 说明
 
-- 依赖变化：核心功能仍**仅用标准库**；Pillow 为可选增强（`pip install pillow`）
+- 依赖变化：核心功能仍**仅用标准库**（该版本引入的 Pillow 已在下一版被 PySide6 取代）
 - 打包体积从 11.06 MB 增至约 33 MB（含 Pillow）
 - 窗口默认尺寸 1180×820
 
@@ -84,7 +100,7 @@ SHA256 `3B5934E0E1E55A3411F33F9B02D17C642122DD47895911958CD5B3099B407375`）。
   会按 TLS 指纹拒绝 urllib，这些域名直接走 curl 模式并省略自定义 User-Agent
 - **任务世代号机制** `_task_seq`：取消或切换任务后，旧线程的迟到回调被
   丢弃，不再污染新任务的进度条与状态栏
-- 单元测试 151 项（`tests/test_app.py`），不触网、不创建 GUI 窗口
+- 单元测试 165 项（`tests/test_app.py`），不触网、不创建 GUI 窗口
 - 代码卫生自检（`tests/selfcheck.py`），仅依赖标准库
 - `CHANGELOG.md`
 

@@ -12,11 +12,20 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue?logo=open-source-initiative&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)
-![Deps](https://img.shields.io/badge/dependencies-stdlib%20%2B%20optional%20Pillow-informational)
+![UI](https://img.shields.io/badge/UI-PySide6%20(Qt%206)-0078D6)
 
 ## 快速开始
 
-从源码执行 `run.bat` 即可运行；也可自行打包为独立 exe（见下方「打包为 EXE」，约 33 MB，无需安装 Python 环境）。
+界面层由 **PySide6（Qt 6）** 渲染，安装依赖后即可运行：
+
+```bash
+pip install -r requirements.txt
+python app.py
+```
+
+也可执行 `run.bat`，或自行打包为独立 exe（见下方「打包为 EXE」，约 36 MB，无需安装 Python 环境）。
+
+> 核心功能（工具库 / 下载 / 静默部署 / 数据校验）仍**仅依赖标准库**；PySide6 仅用于界面。
 
 ## 下载
 
@@ -136,20 +145,17 @@
 python app.py
 ```
 
-核心功能仅依赖 Python 标准库（tkinter、urllib、subprocess 等），无需 pip 安装任何第三方包。
+核心业务逻辑仅依赖 Python 标准库（urllib、subprocess、json 等）。
+界面层使用 [PySide6](https://pypi.org/project/PySide6/)（Qt 6 官方绑定，LGPL v3），
+按上面的 `pip install -r requirements.txt` 安装即可。
 
-**可选依赖**：安装 [Pillow](https://pypi.org/project/Pillow/) 可获得液态玻璃界面特效（毛玻璃卡片、渐变按钮与进度条、折射光晕背景）：
-
-```bash
-pip install pillow
-```
-
-未安装时程序自动降级为纯色界面，功能完全不受影响。
+> 只想运行数据层校验（无图形环境，如 CI Linux 容器）：
+> `python tooldata.py` —— 该模块不依赖任何 GUI 框架。
 
 ## 开发与测试
 
 ```bash
-# 运行单元测试（151 项，不触网、不创建 GUI 窗口，约 0.03 秒）
+# 运行单元测试（165 项，不触网、不创建 GUI 窗口，约 0.03 秒）
 python -m unittest discover -s tests -v
 
 # 或使用 pytest
@@ -162,7 +168,7 @@ python -m tests.selfcheck
 测试覆盖文件名净化、自定义工具强校验、占位符替换、hosts 屏蔽诊断、CDN 站点判定、响应头与进度解析、已安装检测容错、工具数据层一致性与 README 一致性。
 
 ```bash
-# 校验内置工具库（不依赖 tkinter，可在任意 Python 环境运行）
+# 校验内置工具库（不依赖 GUI 框架，可在任意 Python 环境运行）
 python tooldata.py
 ```
 
@@ -170,10 +176,10 @@ CI 说明：
 
 | 平台 | 配置 | 内容 |
 | --- | --- | --- |
-| GitHub | `.github/workflows/ci.yml` | windows-latest：语法检查 + 151 项单元测试 + 工具库校验 + 卫生自检 |
+| GitHub | `.github/workflows/ci.yml` | windows-latest：语法检查 + 165 项单元测试 + 工具库校验 + 卫生自检 |
 | Gitee | `.workflow/tools-data-check.yml` | Linux 容器：语法检查 + 工具库校验 |
 
-Gitee 免费版流水线仅提供 Linux 容器，而本项目是 Windows 专用工具（需要 tkinter），因此 Gitee 侧只跑不依赖图形环境的数据层校验；完整单元测试以 GitHub 侧为准。
+Gitee 免费版流水线仅提供 Linux 容器，而本项目是 Windows 专用工具（需要 PySide6 GUI 插件），因此 Gitee 侧只跑不依赖图形环境的数据层校验；完整单元测试与界面测试以 GitHub 侧为准。
 
 ### 新增工具
 
@@ -196,16 +202,20 @@ Gitee 免费版流水线仅提供 Linux 容器，而本项目是 Windows 专用�
 
 ## 打包为 EXE
 
-推荐使用 `build.spec`（其中声明了 `PIL.ImageTk` 等延迟导入模块的 `hiddenimports`，缺了会导致玻璃特效静默失效）：
+推荐使用 `build.spec`。Qt 的模块加载以运行时解析为主，静态分析抓不全，
+spec 里已显式声明 `hiddenimports` 并排除用不到的大件
+（WebEngine / QML / 3D 可省下数百 MB）：
 
 ```bash
-pip install pyinstaller pillow
+pip install pyinstaller -r requirements.txt
 pyinstaller build.spec
 ```
 
-产物位于 `dist\Programming-Tools-Downloader.exe`（约 33 MB，含 Pillow）。
+产物位于 `dist\Programming-Tools-Downloader.exe`（约 36 MB，含 Qt 运行时）。
 
-> 也可用命令行：`pyinstaller --onefile --windowed --noupx --name "Programming-Tools-Downloader" --icon app_icon.ico app.py`，但这样不会应用 spec 里的 `hiddenimports`，需自行确认 Pillow 已打包（产物应 ≥ 20 MB）。
+> 也可用命令行，但不会应用 spec 的 `excludes`，产物会明显变大。
+> 无论哪种方式，打包后都应跑一次自检确认 Qt 完整：
+> `python check_qt_runtime.py`
 
 二进制产物不入库，请通过 Releases 或本地构建获取。
 
@@ -223,14 +233,17 @@ Better-programming-tools-download/
 ├── app.py                  # 主程序：GUI + 下载引擎 + 部署器
 ├── tools.py                # 28 个工具的版本与部署配置
 ├── tooldata.py             # 零依赖数据层：工具校验与读写（CI 可独立运行）
-├── ui_theme.py             # 液态玻璃主题引擎（渐变背景/毛玻璃面板/渐变控件）
-├── ui_widgets.py           # 自绘玻璃控件（兼容 ttk 接口）
+├── ui_qt.py                # Qt 主题引擎：QSS 样式表 / 玻璃卡片 / 渐变控件 / 光晕背景
+├── ui_bind.py              # tkinter→Qt 适配层（保持业务代码不变）
+├── check_qt_runtime.py     # 打包产物自检：确认 Qt 完整、大件已裁剪
 ├── app_icon.ico            # 应用图标
 ├── run.bat                 # 启动脚本
-├── build.spec              # PyInstaller 打包配置（含 Pillow hiddenimports）
+├── requirements.txt        # 运行期依赖（PySide6-Essentials）
+├── build.spec              # PyInstaller 打包配置（Qt hiddenimports + 排除大件）
 ├── CHANGELOG.md            # 更新日志
 ├── tests/
-│   ├── test_app.py         # 单元测试（151 项）
+│   ├── test_app.py         # 单元测试（165 项）
+│   ├── smoke_ui.py         # 界面集成冒烟测试（实例化主窗口并驱动交互）
 │   ├── selfcheck.py        # 代码卫生自检
 │   └── __init__.py
 ├── .github/
@@ -238,7 +251,7 @@ Better-programming-tools-download/
 ├── .workflow/
 │   └── tools-data-check.yml # Gitee Go：数据层校验（Linux 容器）
 └── dist/                   # 打包输出（已 gitignore）
-    └── 编程工具下载器.exe
+    └── Programming-Tools-Downloader.exe
 ```
 
 ## 故障排查
