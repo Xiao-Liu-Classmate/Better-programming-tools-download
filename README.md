@@ -155,7 +155,7 @@ python app.py
 ## 开发与测试
 
 ```bash
-# 运行单元测试（165 项，不触网、不创建 GUI 窗口，约 0.03 秒）
+# 运行单元测试（168 项，不触网、不创建 GUI 窗口，约 0.03 秒）
 python -m unittest discover -s tests -v
 
 # 或使用 pytest
@@ -176,7 +176,7 @@ CI 说明：
 
 | 平台 | 配置 | 内容 |
 | --- | --- | --- |
-| GitHub | `.github/workflows/ci.yml` | windows-latest：语法检查 + 165 项单元测试 + 工具库校验 + 卫生自检 |
+| GitHub | `.github/workflows/ci.yml` | windows-latest：语法检查 + 168 项单元测试 + 工具库校验 + 卫生自检 |
 | Gitee | `.workflow/tools-data-check.yml` | Linux 容器：语法检查 + 工具库校验 |
 
 Gitee 免费版流水线仅提供 Linux 容器，而本项目是 Windows 专用工具（需要 PySide6 GUI 插件），因此 Gitee 侧只跑不依赖图形环境的数据层校验；完整单元测试与界面测试以 GitHub 侧为准。
@@ -242,7 +242,7 @@ Better-programming-tools-download/
 ├── build.spec              # PyInstaller 打包配置（Qt hiddenimports + 排除大件）
 ├── CHANGELOG.md            # 更新日志
 ├── tests/
-│   ├── test_app.py         # 单元测试（165 项）
+│   ├── test_app.py         # 单元测试（168 项）
 │   ├── smoke_ui.py         # 界面集成冒烟测试（实例化主窗口并驱动交互）
 │   ├── selfcheck.py        # 代码卫生自检
 │   └── __init__.py

@@ -234,6 +234,8 @@ class TreeShim:
         self._next_row = 0
         self._cbs = {}
         self._filters = []
+        # 回调重入保护: 业务层回调里可能再改选中(如 load_category)
+        self._in_select_cb = False
 
         widget.setColumnCount(len(self._columns))
         widget.setHeaderLabels(self._columns)
@@ -253,8 +255,24 @@ class TreeShim:
     # ── 内部 ──
 
     def _on_view_selection(self):
+        """用户点击/键盘移动导致的选中变化(Qt 信号入口)。
+
+        必须在**这里**派发 ``<<TreeviewSelect>>``: 这是用户交互唯一
+        会走的路径, 业务层(_on_category_select / _on_tool_select)全
+        靠该回调。只更新 ``_sel`` 而不派发, 表现为"点击分类无反应"。
+        """
         items = self.w.selectedItems()
-        self._sel = [self._iid_of(it) for it in items]
+        new_sel = [self._iid_of(it) for it in items]
+        if new_sel == self._sel:
+            return          # 选择未变化, 不重复派发(对齐 ttk 语义)
+        self._sel = new_sel
+        if self._in_select_cb:
+            return          # 防回调内再次改选中导致递归
+        self._in_select_cb = True
+        try:
+            self._emit_select()
+        finally:
+            self._in_select_cb = False
 
     def _iid_of(self, qitem):
         iid = qitem.data(0, QtCore.Qt.UserRole)
@@ -271,27 +289,35 @@ class TreeShim:
     # ── ttk API ──
 
     def delete(self, *items):
-        if not items:
+        # 全量删除: 静音信号, 避免 clear() 连带清空选中而误派发回调
+        # (调用方随后会自行 selection_set)
+        self.w.blockSignals(True)
+        try:
+            if not items:
+                self.w.clear()
+                self._iids.clear()
+                self._sel = []
+                return
+            drop = {str(i) for i in items}
+            keep = [(k, o) for k, o in self._iids.items()
+                    if k not in drop]
             self.w.clear()
             self._iids.clear()
             self._sel = []
-            return
-        drop = {str(i) for i in items}
-        keep = [(k, o) for k, o in self._iids.items() if k not in drop]
-        self.w.clear()
-        self._iids.clear()
-        self._sel = []
-        for key, obj in keep:
-            vals = obj.values() if isinstance(obj, _TreeItem) else list(obj)
-            tgs = list(obj.tags()) if isinstance(obj, _TreeItem) else []
-            q = QtWidgets.QTreeWidgetItem(self.w)
-            q.setData(0, QtCore.Qt.UserRole, key)
-            for c, v in enumerate(vals):
-                q.setText(c, str(v))
-            it = _TreeItem(q)
-            it.set_tags(tgs)
-            self._iids[key] = it
-        self._apply_tag_colors()
+            for key, obj in keep:
+                vals = (obj.values() if isinstance(obj, _TreeItem)
+                        else list(obj))
+                tgs = list(obj.tags()) if isinstance(obj, _TreeItem) else []
+                q = QtWidgets.QTreeWidgetItem(self.w)
+                q.setData(0, QtCore.Qt.UserRole, key)
+                for c, v in enumerate(vals):
+                    q.setText(c, str(v))
+                it = _TreeItem(q)
+                it.set_tags(tgs)
+                self._iids[key] = it
+            self._apply_tag_colors()
+        finally:
+            self.w.blockSignals(False)
 
     def insert(self, _parent, _index, iid=None, values=(), tags=()):
         """追加一行。
@@ -340,22 +366,35 @@ class TreeShim:
         return list(self._sel)
 
     def selection_set(self, iid):
+        """选中单行(对齐 ttk selectmode="browse")。
+
+        实现上会先清空再选中, 中间态会被 Qt 的 itemSelectionChanged
+        捕获, 导致同一次操作派发两次回调("清空" + "选中")。故这里
+        静音 Qt 信号, 统一在末尾按 ttk 语义派发一次。
+        """
         key = str(iid)
         if key not in self._iids:
             return
-        self.w.clearSelection()
-        for i in range(self.w.topLevelItemCount()):
-            q = self.w.topLevelItem(i)
-            if self._iid_of(q) == key:
-                q.setSelected(True)
-                self.w.setCurrentItem(q)
-                break
-        self._on_view_selection()
-        # ttk 的 selection_set 不派发 <<TreeviewSelect>>, 但本项目的
-        # _on_category_select 依赖"分类树选中即刷新"这一语义;
-        # Qt 的 itemSelectionChanged 是信号驱动, 手动置选中不经过它,
-        # 故这里显式补发, 保持与原交互行为一致。
-        self._emit_select()
+        self.w.blockSignals(True)
+        try:
+            self.w.clearSelection()
+            for i in range(self.w.topLevelItemCount()):
+                q = self.w.topLevelItem(i)
+                if self._iid_of(q) == key:
+                    q.setSelected(True)
+                    self.w.setCurrentItem(q)
+                    break
+        finally:
+            self.w.blockSignals(False)
+        if self._sel == [key]:
+            return              # 选中未变化, 不派发
+        self._sel = [key]
+        if not self._in_select_cb:
+            self._in_select_cb = True
+            try:
+                self._emit_select()
+            finally:
+                self._in_select_cb = False
 
     def selection_add(self, iid):
         key = str(iid)
@@ -366,8 +405,6 @@ class TreeShim:
             if self._iid_of(q) == key:
                 q.setSelected(True)
                 break
-        self._on_view_selection()
-        self._emit_select()
 
     def get_children(self, _parent=""):
         return list(self._iids.keys())
@@ -581,7 +618,13 @@ class ProgressShim:
 
 
 class _Invoke(QtCore.QObject):
-    """信号中转: 使 after() 可从任意线程调用。"""
+    """信号中转: 使 after() 可从任意线程调用。
+
+    必须挂到窗口下作为子对象: 若无 parent 且生命周期只由 Python
+    引用控制, 窗口销毁后它可能先于 QApplication 被 GC, 底层 C++
+    对象已释放而 Python 包装仍在 —— 解释器退出阶段访问它会触发
+    0xC0000409。
+    """
 
     sig = QtCore.Signal(object)
 
@@ -591,7 +634,8 @@ class RootShim:
 
     def __init__(self, window):
         self._w = window
-        self._invoke = _Invoke()
+        # parent 指向窗口: 随窗口一起销毁, 杜绝悬空 QObject
+        self._invoke = _Invoke(window)
         self._invoke.sig.connect(self._run_cb)
         self._timers = {}
         # itertools.count 的 next() 在 CPython 下线程安全, 避免工作线程
@@ -685,11 +729,25 @@ class RootShim:
         self._w.closeEvent.connect(lambda _e: (callback(), _e.accept())[0])
 
     def destroy(self):
+        """关闭窗口并释放内部资源(幂等)。"""
+        if self._closing:
+            return
         self._closing = True
         for t in self._timers.values():
-            t.stop()
+            try:
+                t.stop()
+            except RuntimeError:
+                pass
         self._timers.clear()
-        self._w.close()
+        # 断开信号: 窗口销毁后不再有回调入口, 避免悬空连接
+        try:
+            self._invoke.sig.disconnect(self._run_cb)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            self._w.close()
+        except RuntimeError:
+            pass          # 底层对象已销毁
 
     def update_idletasks(self):
         QtWidgets.QApplication.processEvents()

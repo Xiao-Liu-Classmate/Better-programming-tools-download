@@ -100,7 +100,7 @@ SHA256 `3B5934E0E1E55A3411F33F9B02D17C642122DD47895911958CD5B3099B407375`）。
   会按 TLS 指纹拒绝 urllib，这些域名直接走 curl 模式并省略自定义 User-Agent
 - **任务世代号机制** `_task_seq`：取消或切换任务后，旧线程的迟到回调被
   丢弃，不再污染新任务的进度条与状态栏
-- 单元测试 165 项（`tests/test_app.py`），不触网、不创建 GUI 窗口
+- 单元测试 168 项（`tests/test_app.py`），不触网、不创建 GUI 窗口
 - 代码卫生自检（`tests/selfcheck.py`），仅依赖标准库
 - `CHANGELOG.md`
 

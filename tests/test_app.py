@@ -16,6 +16,35 @@ import sys
 import tempfile
 import unittest
 
+# QApplication 必须持有强引用, 否则被GC 后解释器退出会访问已销毁的
+# Qt 对象, 触发 0xC0000409 崩溃
+_QT_APP = None
+
+# 各测试类累积创建的顶层 QWidget, 在 tearDownClass 统一回收
+_QTWIDGETS = []
+
+
+def _dispose_qtwidgets(cls):
+    """显式销毁 cls 累积创建的顶层 QWidget。
+
+    不能用 ``deleteLater``: 它只在事件循环跑到时才真正析构, 而
+    unittest 收尾时未必再 pump 事件, 控件便以"半存活"状态留到解释器
+    退出, 触发 0xC0000409。故用 ``shiboken6.delete`` 立即释放底层
+    C++ 对象, 再把 Python 包装引用清空。
+    """
+    import shiboken6
+    from PySide6 import QtWidgets
+    for w in reversed(getattr(cls, "_QTWIDGETS", [])):
+        try:
+            w.setParent(None)
+            if shiboken6.isValid(w):
+                shiboken6.delete(w)
+        except (RuntimeError, AttributeError):
+            pass
+    cls._QTWIDGETS = []
+    QtWidgets.QApplication.processEvents()
+
+
 # 路径自适应: 定位仓库根目录并加入导入路径
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -489,8 +518,22 @@ class TestUIThemeRendering(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        cls._QTWIDGETS = []
+        # 必须先建 QApplication 再操作 QFont/QImage: 这些对象依赖
+        # 应用上下文, 应用不存在时被回收会在解释器退出阶段触发
+        # 0xC0000409 崩溃(表现为"单跑通过、连跑必崩")
+        global _QT_APP
+        from PySide6 import QtWidgets
+        if _QT_APP is None:
+            _QT_APP = (QtWidgets.QApplication.instance()
+                       or QtWidgets.QApplication([]))
+        cls.app = _QT_APP
         import ui_qt
         cls.U = ui_qt
+
+    @classmethod
+    def tearDownClass(cls):
+        _dispose_qtwidgets(cls)
 
     def test_palette_values_are_qss_safe(self):
         """所有颜色必须是 QSS 可接受的字符串。
@@ -575,8 +618,18 @@ class TestQtBindLayer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        cls._QTWIDGETS = []
+        global _QT_APP
+        from PySide6 import QtWidgets
+        if _QT_APP is None:
+            _QT_APP = (QtWidgets.QApplication.instance()
+                       or QtWidgets.QApplication([]))
         import ui_bind
         cls.B = ui_bind
+
+    @classmethod
+    def tearDownClass(cls):
+        _dispose_qtwidgets(cls)
 
     # ── 接口存在性 ──
 
@@ -638,8 +691,10 @@ class TestQtBindLayer(unittest.TestCase):
     def test_root_after_runs_with_extra_args(self):
         """after(ms, fn, arg) 必须在主线程把 arg 传给 fn。"""
         self._app()
-        from PySide6 import QtCore, QtWidgets
-        win = QtWidgets.QMainWindow()
+        from PySide6 import QtWidgets
+        # 必须登记: 未登记的顶层控件会被 Python GC 而非显式销毁,
+        # 其 C++ 对象仍被信号连接引用, 解释器退出时触发 0xC0000409
+        win = self._widget(QtWidgets.QMainWindow)
         root = self.B.RootShim(win)
         got = []
         root.after(0, lambda v: got.append(v), "值")
@@ -648,14 +703,38 @@ class TestQtBindLayer(unittest.TestCase):
             if got:
                 break
         self.assertEqual(got, ["值"], "额外参数未透传或回调未执行")
-        win.close()
+        root.destroy()
 
     # ── 行为(离屏 Qt) ──
 
     def _app(self):
+        """取得 QApplication 并保持强引用。
+
+        必须存到模块级变量: PySide6 的 QApplication 若被垃圾回收,
+        解释器退出时会访问已销毁的 Qt 对象并触发 0xC0000409 崩溃。
+        """
         from PySide6 import QtWidgets
-        return (QtWidgets.QApplication.instance()
-                or QtWidgets.QApplication([]))
+        global _QT_APP
+        if _QT_APP is None:
+            _QT_APP = (QtWidgets.QApplication.instance()
+                       or QtWidgets.QApplication([]))
+        return _QT_APP
+
+    def _widget(self, cls, *args, **kw):
+        """创建顶层 QWidget, 登记到类级列表统一在类结束时回收。
+
+        无 parent 的 QWidget 若被 Python GC 而底层 C++ 对象仍被
+        信号连接引用, 会在解释器退出阶段触发 0xC0000409。
+
+        注意不能用 ``addCleanup(w.deleteLater)``: cleanup 在
+        tearDown 阶段执行, 此时控件可能仍挂在视图树上, 提前 delete
+        会让视图残留悬空指针, 同样崩溃。改为类级列表 + setUpClass
+        的 tearDownClass 统一清理, 保证顺序安全。
+        """
+        w = cls(*args, **kw)
+        self.__class__._QTWIDGETS.append(w)
+        return w
+
 
     def test_var_roundtrip_without_widget(self):
         self._app()
@@ -679,7 +758,7 @@ class TestQtBindLayer(unittest.TestCase):
     def test_tree_insert_delete_and_selection(self):
         self._app()
         from PySide6 import QtWidgets
-        w = QtWidgets.QTreeWidget()
+        w = self._widget(QtWidgets.QTreeWidget)
         t = self.B.TreeShim(w, columns=("a", "b"))
         t.insert("", "end", iid="1", values=("x", "y"))
         t.insert("", "end", iid="2", values=("p", "q"))
@@ -695,7 +774,7 @@ class TestQtBindLayer(unittest.TestCase):
         """下载高亮依赖 tags 读写。"""
         self._app()
         from PySide6 import QtWidgets
-        w = QtWidgets.QTreeWidget()
+        w = self._widget(QtWidgets.QTreeWidget)
         t = self.B.TreeShim(w, columns=("a",))
         t.insert("", "end", iid="1", values=("x",), tags=("installed",))
         self.assertIn("installed", t.item("1", "tags"))
@@ -705,14 +784,79 @@ class TestQtBindLayer(unittest.TestCase):
     def test_tree_missing_iid_raises_like_ttk(self):
         self._app()
         from PySide6 import QtWidgets
-        t = self.B.TreeShim(QtWidgets.QTreeWidget(), columns=("a",))
+        t = self.B.TreeShim(self._widget(QtWidgets.QTreeWidget), columns=("a",))
         with self.assertRaises(KeyError):
             t.item("nope", "values")
+
+    def test_tree_selection_change_notifies_callback(self):
+        """回归: 用户点击必须派发 <<TreeviewSelect>>。
+
+        真实缺陷: ``_on_view_selection`` (Qt itemSelectionChanged 的
+        槽) 只更新内部 ``_sel`` 而不派发回调, 导致点击分类标签无反应。
+        程序化 ``selection_set`` 恰好会补发, 所以只测程序化路径的
+        用例全部通过 —— 必须直接模拟视图侧选中来守住这条契约。
+        """
+        self._app()
+        from PySide6 import QtWidgets
+        view = self._widget(QtWidgets.QTreeWidget)
+        t = self.B.TreeShim(view, columns=("a",))
+        for iid in ("1", "2"):
+            t.insert("", "end", iid=iid, values=(f"row{iid}",))
+
+        seen = []
+        t.bind("<<TreeviewSelect>>", lambda _e: seen.append(
+            list(t.selection())))
+
+        # 模拟用户点击第二行: 只改视图选中, 不碰 shim 接口
+        view.clearSelection()
+        view.topLevelItem(1).setSelected(True)
+        QtWidgets.QApplication.processEvents()
+
+        self.assertEqual(t.selection(), ["2"], "选中状态未同步")
+        self.assertTrue(seen, "点击未派发 <<TreeviewSelect>>")
+        self.assertEqual(seen[-1], ["2"])
+
+    def test_tree_selection_callback_not_duplicated(self):
+        """同一次选择变化不应重复派发回调。"""
+        self._app()
+        from PySide6 import QtWidgets
+        view = self._widget(QtWidgets.QTreeWidget)
+        t = self.B.TreeShim(view, columns=("a",))
+        t.insert("", "end", iid="1", values=("row1",))
+        t.insert("", "end", iid="2", values=("row2",))
+
+        seen = []
+        t.bind("<<TreeviewSelect>>", lambda _e: seen.append(1))
+        t.selection_set("2")
+        QtWidgets.QApplication.processEvents()
+        n1 = len(seen)
+        t.selection_set("2")          # 重复选中同一行
+        QtWidgets.QApplication.processEvents()
+        self.assertEqual(len(seen), n1,
+                         f"重复选中触发了额外回调: {n1} -> {len(seen)}")
+
+    def test_tree_selection_survives_callback_reentrancy(self):
+        """回调内再次改选中不得递归爆栈。"""
+        self._app()
+        from PySide6 import QtWidgets
+        view = self._widget(QtWidgets.QTreeWidget)
+        t = self.B.TreeShim(view, columns=("a",))
+        t.insert("", "end", iid="1", values=("row1",))
+        t.insert("", "end", iid="2", values=("row2",))
+
+        def on_select(_e):
+            if t.selection() == ["1"]:
+                t.selection_set("2")      # 回调内重入
+
+        t.bind("<<TreeviewSelect>>", on_select)
+        t.selection_set("1")
+        QtWidgets.QApplication.processEvents()
+        self.assertEqual(t.selection(), ["2"])
 
     def test_combo_values_and_current(self):
         self._app()
         from PySide6 import QtWidgets
-        c = self.B.ComboShim(QtWidgets.QComboBox())
+        c = self.B.ComboShim(self._widget(QtWidgets.QComboBox))
         c["values"] = ["a", "b", "c"]
         self.assertEqual(c["values"], ["a", "b", "c"])
         c.current(1)
@@ -736,7 +880,7 @@ class TestQtBindLayer(unittest.TestCase):
         """ttk 允许 maximum=0, Qt 会除零 -> 必须钳位。"""
         self._app()
         from PySide6 import QtWidgets
-        p = self.B.ProgressShim(QtWidgets.QProgressBar())
+        p = self.B.ProgressShim(self._widget(QtWidgets.QProgressBar))
         p.configure(maximum=0, value=0)
         self.assertGreaterEqual(p.w.maximum(), 1)
         p.configure(maximum=100, value=42)
@@ -747,7 +891,7 @@ class TestQtBindLayer(unittest.TestCase):
         """日志区必须只读, 且能追加/读取/清空。"""
         self._app()
         from PySide6 import QtWidgets
-        tw = QtWidgets.QPlainTextEdit()
+        tw = self._widget(QtWidgets.QPlainTextEdit)
         t = self.B.TextShim(tw)
         t.insert("end", "line1\n")
         t.insert("end", "line2\n")
@@ -818,7 +962,10 @@ class TestQtIntegration(unittest.TestCase):
         误用立刻暴露在测试阶段。
         """
         from PySide6 import QtWidgets
-        QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        global _QT_APP
+        if _QT_APP is None:
+            _QT_APP = (QtWidgets.QApplication.instance()
+                       or QtWidgets.QApplication([]))
         for cls in (QtWidgets.QLabel, QtWidgets.QPushButton,
                     QtWidgets.QComboBox):
             with self.subTest(cls=cls.__name__):

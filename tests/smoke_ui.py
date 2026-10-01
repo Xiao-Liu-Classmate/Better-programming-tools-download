@@ -56,6 +56,22 @@ def wait_for(fn, q, timeout=5.0):
     return False
 
 
+def click_row(view, idx):
+    """模拟真实鼠标点击一行(清空选中 -> 选中目标行)。
+
+    必须走这条路径而非 shim 的 selection_set: 用户点击只会触发
+    Qt 的 itemSelectionChanged, 不会经过 shim 的程序化接口。
+    历史上正是"程序化调用正常、真实点击失效"的漏网之处。
+    """
+    view.clearSelection()
+    item = view.topLevelItem(idx)
+    if item is None:
+        return False
+    item.setSelected(True)
+    view.setCurrentItem(item)
+    return True
+
+
 def main():
     q = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     win = QtWidgets.QMainWindow()
@@ -90,13 +106,59 @@ def main():
     w._sort_combo.setCurrentIndex(0)
     pump(q)
 
-    print("[4] 分类树")
+    print("[4] 分类树(模拟真实点击)")
     cats = w.cat_tree.get_children()
     check("分类已填充", len(cats) > 5, f"{len(cats)}")
-    w.cat_tree.selection_set(cats[1])
+    # 逐个点击: 点击分类必须真的切换 current_category 并过滤工具列表
+    expect_n = {"语言运行时": 8, "构建工具": 2}
+    switched = 0
+    for i, c in enumerate(cats):
+        if c == "all":
+            continue
+        before = w.current_category
+        check("点击目标行存在", click_row(w.cat_view, i), f"idx={i}")
+        pump(q)
+        if w.current_category != before and w.current_category == c:
+            switched += 1
+        else:
+            print(f"    [!!] 点击 {c!r} 未切换: "
+                  f"{before!r} -> {w.current_category!r}")
+        if c in expect_n:
+            n = len(w.tool_tree.get_children())
+            check(f"{c} 工具数={expect_n[c]}", n == expect_n[c], f"实际 {n}")
+    check("全部分类点击均可切换", switched == len(cats) - 1,
+          f"{switched}/{len(cats) - 1}")
+    # 回到全部
+    click_row(w.cat_view, 0)
     pump(q)
-    check("切换生效", w.current_category != "全部", w.current_category)
-    w.cat_tree.selection_set(cats[0])
+    check("点'全部'恢复 28 条", len(w.tool_tree.get_children()) == 28,
+          f"实际 {len(w.tool_tree.get_children())}")
+
+    print("[4b] 工具列表(模拟真实点击)")
+    w.tool_tree.selection_set("all")
+    pump(q)
+    n_rows = w.tool_view.topLevelItemCount()
+    ok_sel = 0
+    for idx in (0, 3, min(7, n_rows - 1)):
+        if click_row(w.tool_view, idx):
+            pump(q)
+            if w.current_tool is not None and w.current_versions:
+                ok_sel += 1
+    check("点击行可填充当前工具与版本", ok_sel == 3, f"{ok_sel}/3")
+
+    print("[4c] 分类 + 搜索组合")
+    click_row(w.cat_view, cats.index("语言运行时"))
+    pump(q)
+    w.keyword.set("python")
+    pump(q)
+    hit = len(w.tool_tree.get_children())
+    check("分类内搜索有结果", 0 < hit < 8, f"实际 {hit}")
+    w.keyword.set("")
+    pump(q)
+    check("清空搜索回到该分类全量",
+          len(w.tool_tree.get_children()) == 8,
+          f"实际 {len(w.tool_tree.get_children())}")
+    click_row(w.cat_view, 0)
     pump(q)
 
     print("[5] 选中工具与版本下拉")
