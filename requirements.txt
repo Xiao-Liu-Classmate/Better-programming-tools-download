@@ -1,13 +1,21 @@
-# 运行期依赖
+# Runtime dependencies
 #
-# 界面层使用 PySide6(Qt 6 官方 Python 绑定); 核心功能(工具库/下载/
-# 部署/数据校验)仍仅依赖标准库。
+# NOTE: Keep this file pure ASCII.
+# pip reads requirements files with the locale codec (GBK on zh-CN
+# Windows), so non-ASCII comments raise UnicodeDecodeError and the
+# install silently fails -- which then surfaces far away as
+# "ModuleNotFoundError: No module named 'PySide6'" in the test step.
+#
+# UI layer: PySide6 (official Qt 6 binding for Python).
+# Core features (tool catalog / download / silent deploy / data
+# validation) still depend on the standard library only.
 #
 #   pip install -r requirements.txt
 #
-# 若只想运行数据层校验(无图形环境, 如 CI Linux 容器):
+# For data-layer validation only (no GUI environment, e.g. CI Linux
+# container), PySide6 is not required:
 #   python tooldata.py
 PySide6-Essentials==6.11.2
 
-# 构建 exe 时需要(不随程序分发)
+# Needed to build the exe (not shipped with the program):
 #   pip install pyinstaller

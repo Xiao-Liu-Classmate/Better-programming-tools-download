@@ -43,6 +43,13 @@ jobs:
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "版本号: $tag"
 
+      - name: 安装依赖
+        # 必须排在测试与打包之前: 界面层已迁移 PySide6, 单元测试
+        # 会 import app -> PySide6, 缺依赖直接 ModuleNotFoundError。
+        # (曾把本步骤放在测试之后, 导致 tag 构建在"运行单元测试"
+        #  处失败, Release 根本没生成。)
+        run: python -m pip install --upgrade -r requirements.txt
+
       - name: 语法检查
         run: python -X utf8 -m py_compile app.py ui_qt.py ui_bind.py tools.py tooldata.py
 
@@ -52,15 +59,18 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -X utf8 -m unittest discover -s tests -v
 
+      - name: run.bat 端到端测试
+        # 回归: run.bat 曾因换行符为 LF 而完全无法运行
+        run: python -X utf8 tests/test_runbat.py
+
       - name: 校验工具库
         run: python -X utf8 tooldata.py
 
-      - name: 安装构建依赖
-        # 必须同时装 PySide6: 它是界面层的运行期依赖。
+      - name: 安装打包工具
+        # 运行期依赖已在上方"安装依赖"装好; 此处只补打包工具。
         # 曾因只装 pyinstaller 导致产物缺渲染库(11MB 而非 33MB),
         # 界面静默降级 —— 故下面还有一道产物校验与 Qt 模块检查。
-        run: |
-          python -m pip install --upgrade -r requirements.txt "pyinstaller==6.11.1"
+        run: python -m pip install --upgrade "pyinstaller==6.11.1"
 
       - name: 打包并校验 exe
         # id 必须保留: 后续 Release 步骤靠它读取 size/sha,
