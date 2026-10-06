@@ -29,25 +29,26 @@ python app.py
 
 ## 下载
 
-**v4.1.0 发行版**（液态玻璃界面）
+**v4.2.0 发行版**（界面层迁移至 PySide6 / Qt 6）
 
 | 平台 | 附件 | 链接 |
 | --- | --- | --- |
-| GitHub | `Programming-Tools-Downloader.exe` | [下载](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases/tag/v4.1.0) |
-| Gitee | `Programming-Tools-Downloader.exe` | [下载](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download/releases/tag/v4.1.0) |
+| GitHub | `Programming-Tools-Downloader.exe` | [下载](https://github.com/Xiao-Liu-Classmate/Better-programming-tools-download/releases/tag/v4.2.0) |
+| Gitee | `Programming-Tools-Downloader.exe` | [下载](https://gitee.com/xiao-xiao-liuA/Better-programming-tools-download/releases/tag/v4.2.0) |
 
-双击即可运行，无需安装 Python 环境。本版界面全面重做为液态玻璃风格，
-程序体积从 11.06 MB 增至 19–33 MB（差异来自两侧构建环境的 Pillow 版本）。
+双击即可运行，无需安装 Python 环境。核心下载与静默部署逻辑与上版一致，
+界面改由 Qt 6 原生渲染。
 
 **校验值**
 
 | 平台 | 大小 | SHA256 |
 | --- | --- | --- |
-| GitHub | 19.45 MB | `7D8AB014BD0004B233FEB6494317CF0D61110E4E586FBF0073A1AAF51339A23A` |
-| Gitee | 33.19 MB | `0655D2C03DF6A992E04B5BB78F6E33E2CEDEE3403B3661D39C0A0DB4B953460F` |
+| GitHub | 38.65 MB | `5EF02C694C5C711E5BD410329CE35A97BDB2214B962E8C58072BF451931AE785` |
+| Gitee | 35.97 MB | `03B13BFAFEECBC62F473044959C3559AFC8C5093505B7387A98B8575DF0C1750` |
 
 > 两侧附件均为 ASCII 文件名，以避免部分 Windows 环境下的中文文件名乱码与杀毒软件误报。
-> 二进制由各自平台独立构建，功能完全一致，故哈希不同。
+> 二进制由各自平台独立构建：GitHub 为 CI 构建，Gitee 为本地构建，
+> 故体积与哈希不同，功能完全一致。
 
 > 仓库不存储二进制文件（`.gitignore` 已排除 `dist/` 与 `*.exe`），可执行文件通过 Releases 或本地构建获取。
 
