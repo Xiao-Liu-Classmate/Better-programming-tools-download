@@ -17,7 +17,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 TARGETS = ["app.py", "tools.py", "tooldata.py",
            "ui_qt.py", "ui_bind.py", "check_qt_runtime.py",
            "tests/test_app.py", "tests/smoke_ui.py",
-           "tests/selfcheck.py"]
+           "tests/test_runbat.py", "tests/selfcheck.py"]
 MAX_LINE = 100
 
 errors = []

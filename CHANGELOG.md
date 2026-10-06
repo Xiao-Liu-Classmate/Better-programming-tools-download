@@ -18,10 +18,27 @@
   - 新增 `check_qt_runtime.py`：打包产物自检（确认 Qt 运行时完整、
     WebEngine 等大件已裁剪）
   - 删除 `ui_theme.py`、`ui_widgets.py`（合计 930 行手写渲染）
+  - 新增 `tests/test_runbat.py`（run.bat 实跑测试）、`requirements.txt`
   - 打包体积 33.19 MB → 35.95 MB
 
-### 计划中
+### 修复
 
+- **`run.bat` 完全无法运行**：换行符为 LF（`cmd.exe` 要求 CRLF），
+  多行被错误拼接，报出 `'0' 不是内部或外部命令`
+  - 新增 `.gitattributes`，显式约束 `.bat`/`.cmd`/`.ps1` 用 CRLF、
+    源码用 LF，从根源防止再犯
+  - 改用 `goto` 顺序流程替代 `if/else` 块（块内 `%var%` 在解析期
+    一次性展开，原 `if %errorlevel%==0` 即因此出错）
+  - 所有解释器调用加 `call` 前缀：`cmd` 调用 `.bat` 若不加 `call`
+    会替换当前批处理上下文而不返回，PATH 中存在 `python.bat` 时
+    脚本会静默停在标题行、退出码却是 0
+  - 探测 `python` / `py -3` / `py` 三种入口；**自动安装缺失的
+    PySide6**（迁移 Qt 后由可选依赖变为必需，旧脚本无此提示）
+  - 传递真实退出码，失败分支给出可操作指引
+- 分类标签点击无法切换：`TreeShim._on_view_selection`（Qt
+  `itemSelectionChanged` 的槽，即用户点击的唯一入口）只更新内部状态
+  而不派发 `<<TreeviewSelect>>` 回调。程序化 `selection_set` 恰好会
+  补发，故此前测试全绿而真实点击失效
 
 ### 计划中
 

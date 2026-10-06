@@ -1,0 +1,26 @@
+# 换行符规范
+#
+# Windows 的 cmd.exe / PowerShell 要求 CRLF 换行: 用 LF 时会把多行
+# 错误拼接解析(run.bat 曾因此报 '0' 不是内部命令)。
+# 在此显式约束, 避免各平台 checkout 后互相污染。
+
+# Windows 批处理与脚本: 必须 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 源码与文档: 统一 LF
+*.py    text eol=lf
+*.spec  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+*.cfg   text eol=lf
+
+# 二进制
+*.ico   binary
+*.png   binary
+*.jpg   binary
+*.exe   binary

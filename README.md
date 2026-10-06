@@ -243,6 +243,7 @@ Better-programming-tools-download/
 ├── CHANGELOG.md            # 更新日志
 ├── tests/
 │   ├── test_app.py         # 单元测试（168 项）
+│   ├── test_runbat.py      # run.bat 实跑测试（换行符/分支/退出码）
 │   ├── smoke_ui.py         # 界面集成冒烟测试（实例化主窗口并驱动交互）
 │   ├── selfcheck.py        # 代码卫生自检
 │   └── __init__.py

@@ -33,8 +33,13 @@ jobs:
 
       - name: 语法检查
         run: |
-          python -X utf8 -m py_compile app.py ui_qt.py ui_bind.py check_qt_runtime.py tools.py tooldata.py tests/test_app.py tests/selfcheck.py tests/smoke_ui.py
+          python -X utf8 -m py_compile app.py ui_qt.py ui_bind.py check_qt_runtime.py tools.py tooldata.py tests/test_app.py tests/selfcheck.py tests/smoke_ui.py tests/test_runbat.py
           echo "语法检查通过"
+
+      - name: run.bat 端到端测试
+        # 回归: run.bat 曾因换行符为 LF 而完全无法运行
+        # (cmd.exe 要求 CRLF)。单看脚本内容查不出问题, 必须实跑。
+        run: python -X utf8 tests/test_runbat.py
 
       - name: 运行单元测试
         # 无头环境必须指定 offscreen 平台插件, 否则 Qt 无法初始化
