@@ -5,7 +5,20 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [4.2.0] - 2026-10-06
+
+界面层迁移至 PySide6（Qt 6）。核心业务逻辑（下载引擎、部署器、批量
+队列、任务世代号、筛选算法）逐行保持不变，由 `ui_bind` 适配层承接
+与界面层的交互。
+
+发布标签 `v4.2.0`。预编译产物见双平台 Releases，附件名统一为
+`Programming-Tools-Downloader.exe`，约 35.95 MB（较上版 +2.76 MB，
+差异来自 Qt 运行时；WebEngine/QML/3D 等大件已在 spec 中排除）。
+
+> ⚠️ 升级须知：本版起**必须安装 PySide6**（`pip install -r
+> requirements.txt`）。界面层不再依赖标准库 tkinter，Pillow 的
+> 液态玻璃渲染已由 Qt 原生实现替代。若依赖缺失，`run.bat` 会自动
+> 尝试安装并给出提示。
 
 ### 变更
 

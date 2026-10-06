@@ -49,7 +49,7 @@ filedialog = ui_bind.filedialog
 
 # ─────────────────────── 常量 ───────────────────────
 
-APP_VERSION = "4.1.0"
+APP_VERSION = "4.2.0"
 APP_TITLE = f"编程工具下载器 v{APP_VERSION}"
 
 USER_AGENT = (
